@@ -1,0 +1,19 @@
+thesis_add_library(gpu
+    SOURCES
+        AccelerationStructure.cpp
+        Barriers.cpp
+        Buffer.cpp
+        Check.cpp
+        ComputeKernel.cpp
+        Context.cpp
+        GpuTimer.cpp
+        Image.cpp
+        Swapchain.cpp
+        VmaImplementation.cpp
+    PUBLIC_DEPS
+        Vulkan::Vulkan
+        vk-bootstrap::vk-bootstrap
+        GPUOpen::VulkanMemoryAllocator
+        thesis::profiling
+    PRIVATE_DEPS
+        nlohmann_json::nlohmann_json)

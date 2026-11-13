@@ -1,0 +1,53 @@
+#pragma once
+
+#include "thesis/core/Camera.h"
+#include "thesis/gpu/GpuTimer.h"
+#include "thesis/gpu/Image.h"
+#include "thesis/resolve/HitShading.h"
+#include "thesis/tracing/RayBatch.h"
+#include "thesis/tracing/Tracer.h"
+#include "thesis/workloads/CameraRays.h"
+
+#include <vulkan/vulkan.h>
+
+#include <filesystem>
+#include <vector>
+
+namespace thesis::app {
+
+// Stage names: shown in Tracy, used as keys in results files.
+inline constexpr const char* kStageRayGeneration = "ray_generation";
+inline constexpr const char* kStageTrace = "trace";
+inline constexpr const char* kStageShading = "shading";
+
+// The per-frame work shared by the window and the benchmark:
+//   camera rays → [tracer socket] → hits → shading → image
+// Each stage is timed on the GPU. One frame in flight at a time.
+class FramePipeline {
+public:
+    FramePipeline(const gpu::Context& context, const std::filesystem::path& shaderDirectory, VkExtent2D resolution);
+
+    // Start of a frame's command buffer: resets the timers, flushes Tracy GPU zones.
+    void begin(VkCommandBuffer cmd);
+    // Ray generation and tracing, with barriers around the tracer.
+    void trace(VkCommandBuffer cmd, tracing::ITracer& tracer, const core::CameraFrame& camera);
+    // Shading into output() (left in GENERAL layout, ready to be copied by the caller).
+    void shade(VkCommandBuffer cmd, const resolve::ShadingParams& params);
+
+    // Call once the frame's commands have finished on the GPU.
+    [[nodiscard]] std::vector<gpu::StageTiming> collectTimings();
+
+    [[nodiscard]] const tracing::RayBatch& batch() const { return batch_; }
+    [[nodiscard]] gpu::StorageImage& output() { return output_; }
+    [[nodiscard]] float aspectRatio() const;
+
+private:
+    const gpu::Context& context_;
+    tracing::RayBatch batch_;
+    gpu::StorageImage output_;
+    workloads::CameraRays cameraRays_;
+    resolve::HitShading shading_;
+    gpu::GpuTimer timer_;
+};
+
+} // namespace thesis::app

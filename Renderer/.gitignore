@@ -1,0 +1,7 @@
+/build/
+/results/
+/out/
+/.vs/
+/.idea/
+CMakeUserPresets.json
+*.tracy

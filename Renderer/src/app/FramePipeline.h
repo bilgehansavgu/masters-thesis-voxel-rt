@@ -1,5 +1,9 @@
 #pragma once
 
+// ============================================================================
+// READING ORDER: FILE 16A (The 3-stage per-frame pipeline)
+// ============================================================================
+
 #include "thesis/core/Camera.h"
 #include "thesis/gpu/GpuTimer.h"
 #include "thesis/gpu/Image.h"
@@ -20,21 +24,23 @@ inline constexpr const char* kStageRayGeneration = "ray_generation";
 inline constexpr const char* kStageTrace = "trace";
 inline constexpr const char* kStageShading = "shading";
 
-// The per-frame work shared by the window and the benchmark:
-//   camera rays → [tracer socket] → hits → shading → image
-// Each stage is timed on the GPU. One frame in flight at a time.
+// The per-frame work shared by the interactive window and the headless benchmark:
+//   Stage 1 (`kStageRayGeneration`): camera rays -> `batch_.rays`
+//   Stage 2 (`kStageTrace`):         `batch_.rays` -> [ITracer socket] -> `batch_.hits`
+//   Stage 3 (`kStageShading`):       `batch_.hits` -> `output_` image ( benchmark skips Stage 3 )
+// Each stage is timed on the GPU with hardware timestamp queries. One frame in flight at a time.
 class FramePipeline {
 public:
     FramePipeline(const gpu::Context& context, const std::filesystem::path& shaderDirectory, VkExtent2D resolution);
 
-    // Start of a frame's command buffer: resets the timers, flushes Tracy GPU zones.
+    // Start of a frame's command buffer: resets the GPU timers, flushes Tracy GPU zones.
     void begin(VkCommandBuffer cmd);
-    // Ray generation and tracing, with barriers around the tracer.
+    // Records Stage 1 (ray generation) and Stage 2 (tracing), with memory barriers around the tracer.
     void trace(VkCommandBuffer cmd, tracing::ITracer& tracer, const core::CameraFrame& camera);
-    // Shading into output() (left in GENERAL layout, ready to be copied by the caller).
+    // Records Stage 3 (shading into `output()`, left in GENERAL layout, ready to be copied to the window).
     void shade(VkCommandBuffer cmd, const resolve::ShadingParams& params);
 
-    // Call once the frame's commands have finished on the GPU.
+    // Call once the frame's commands have finished executing on the GPU to read the stage times in ms.
     [[nodiscard]] std::vector<gpu::StageTiming> collectTimings();
 
     [[nodiscard]] const tracing::RayBatch& batch() const { return batch_; }

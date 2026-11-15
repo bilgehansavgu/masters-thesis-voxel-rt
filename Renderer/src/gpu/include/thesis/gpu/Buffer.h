@@ -1,5 +1,9 @@
 #pragma once
 
+// ============================================================================
+// READING ORDER: FILE 20A (Optional GPU plumbing: RAII GPU memory buffers)
+// ============================================================================
+
 #include <vk_mem_alloc.h>
 #include <vulkan/vulkan.h>
 
@@ -12,13 +16,27 @@ namespace thesis::gpu {
 class Context;
 
 enum class MemoryUsage {
-    DeviceLocal, // GPU memory; filled by copies or shaders
-    Upload,      // host-visible, persistently mapped, written by the CPU
-    Readback,    // host-visible, persistently mapped, read by the CPU
+    DeviceLocal, // fast GPU VRAM; filled by GPU copies or compute shaders
+    Upload,      // CPU-visible memory, persistently mapped, written by the CPU to copy to the GPU
+    Readback,    // CPU-visible memory, persistently mapped, read by the CPU after a GPU copy
 };
 
-// A VkBuffer with its memory (VMA). Move-only. TRANSFER_SRC and TRANSFER_DST are always added
-// to the usage, so any buffer can be uploaded to or read back.
+// A VkBuffer with its memory allocation (managed via VMA, the Vulkan Memory Allocator library).
+//
+// C++ REFRESHER: Move-only RAII (Resource Acquisition Is Initialization)
+// A `Buffer` owns a chunk of GPU memory (`buffer_` and `allocation_`), and its destructor
+// (`~Buffer()`) automatically frees that GPU memory when the `Buffer` variable goes out of scope.
+// What would happen if you accidentally copied a `Buffer` (`Buffer b2 = b1;`)? Both `b1` and `b2`
+// would hold the same `VkBuffer` handle, and when both went out of scope, the GPU buffer would be
+// freed TWICE (a crash!).
+// To prevent that:
+//   - Copying is disabled (`Buffer(const Buffer&) = delete;`).
+//   - Moving is enabled (`Buffer(Buffer&& other) noexcept;`), which transfers the handle from
+//     `other` into `this` and sets `other.buffer_ = VK_NULL_HANDLE` so `other`'s destructor does
+//     nothing.
+//
+// TRANSFER_SRC and TRANSFER_DST are always added to the usage flags so any buffer can be uploaded
+// to or read back.
 class Buffer {
 public:
     Buffer() = default;
@@ -32,9 +50,10 @@ public:
 
     [[nodiscard]] VkBuffer handle() const { return buffer_; }
     [[nodiscard]] VkDeviceSize size() const { return size_; }
+    // 64-bit GPU virtual memory pointer (`VkDeviceAddress`), used by the hardware BVH builder.
     // Only valid when created with VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT.
     [[nodiscard]] VkDeviceAddress address() const { return address_; }
-    // Only valid for Upload and Readback buffers.
+    // CPU pointer to the buffer's bytes. Only valid for Upload and Readback buffers.
     [[nodiscard]] void* mapped() const { return mapped_; }
 
     void flush() const;      // after CPU writes to an Upload buffer
@@ -51,11 +70,14 @@ private:
     void* mapped_ = nullptr;
 };
 
-// Creates a device-local buffer holding `data` (copied through a staging buffer; blocks).
+// Creates a device-local buffer holding `data` (copied through a temporary Upload staging buffer;
+// blocks until the GPU copy completes).
+// C++ REFRESHER: `std::span<const std::byte>` is a lightweight view (pointer + length) over any
+// contiguous array or `std::vector` in CPU memory, without copying the vector.
 [[nodiscard]] Buffer uploadBuffer(const Context& context, std::span<const std::byte> data, VkBufferUsageFlags usage,
                                   VkDeviceSize alignment = 0);
 
-// Copies a buffer's contents to the CPU (blocks). Waits for all previously submitted GPU work.
+// Copies a GPU buffer's contents back to a CPU `std::vector<std::byte>` (blocks until complete).
 [[nodiscard]] std::vector<std::byte> downloadBuffer(const Context& context, const Buffer& buffer);
 
 } // namespace thesis::gpu

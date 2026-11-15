@@ -1,5 +1,9 @@
 #include "Benchmark.h"
 
+// ============================================================================
+// READING ORDER: FILE 19 (Headless benchmark mode: produces thesis JSON reports)
+// ============================================================================
+
 #include "FramePipeline.h"
 #include "SceneSetup.h"
 
@@ -40,7 +44,7 @@ nlohmann::json describeDevice(const gpu::Context& context)
             {"device_local_bytes", info.deviceLocalBytes}};
 }
 
-// The benchmark camera path: one full orbit around the scene per repeat.
+// The benchmark camera path: one full 360-degree orbit around the scene per repeat.
 core::CameraFrame cameraAt(const core::OrbitCamera& base, std::uint32_t frame, std::uint32_t frameCount,
                            float aspectRatio)
 {
@@ -112,6 +116,7 @@ WarmupResult warmUp(RenderFrame&& renderFrame, std::uint32_t framesPerOrbit, dou
 
 int runBenchmark(const Options& options)
 {
+    // Create a headless Vulkan GPU context (no window or swapchain needed).
     gpu::ContextOptions contextOptions;
     contextOptions.applicationName = "Thesis Renderer (benchmark)";
     contextOptions.validation = options.validation;
@@ -149,6 +154,8 @@ int runBenchmark(const Options& options)
             std::this_thread::sleep_for(std::chrono::duration<double>(options.cooldownSeconds));
         }
 
+        // Create and prepare only one tracer at a time so `context.deviceLocalUsage()` reflects
+        // only this tracer's memory footprint.
         const auto tracer = registry.create(tracerName, environment);
         const tracing::PrepareReport prepared = tracer->prepare(gpuScene);
 
@@ -175,6 +182,10 @@ int runBenchmark(const Options& options)
                                {"tracer", tracer->memoryBytes()},
                                {"rays_and_hits", pipeline.batch().memoryBytes()},
                                {"process_device_local", context.deviceLocalUsage()}};
+
+        // Helper lambda that renders a single benchmark frame (ray generation + tracing only;
+        // shading is skipped because headless benchmarking only needs `batch_.hits`) and waits
+        // for the GPU to finish so we can immediately read the hardware timestamp queries.
         const auto renderFrame = [&](std::uint32_t frame) {
             THESIS_ZONE("benchmark frame");
             const core::CameraFrame camera = cameraAt(baseCamera, frame, options.frames, pipeline.aspectRatio());
@@ -224,6 +235,7 @@ int runBenchmark(const Options& options)
         const core::Summary frames = core::summarize(allTraceMs);
         const core::Summary repeats = core::summarize(repeatMedians);
         const double medianMs = repeats.median;
+        // Mega-rays per second (10^6 rays / s): rays / (ms * 10^-3 * 10^6) = rays / (ms * 10^3).
         const double megaRaysPerSecond = medianMs > 0.0 ? static_cast<double>(rayCount) / (medianMs * 1e3) : 0.0;
 
         nlohmann::json summary;

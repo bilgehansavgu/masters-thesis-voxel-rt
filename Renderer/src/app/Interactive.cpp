@@ -1,5 +1,9 @@
 #include "Interactive.h"
 
+// ============================================================================
+// READING ORDER: FILE 18 (Interactive window mode: real-time rendering loop)
+// ============================================================================
+
 #include "ControlPanel.h"
 #include "FramePipeline.h"
 #include "Gui.h"
@@ -35,15 +39,19 @@ std::size_t findTracer(const std::vector<std::string>& names, const std::vector<
 
 int runInteractive(const Options& options)
 {
+    // 1. Open an OS window via GLFW and initialize the Vulkan GPU context attached to that window.
     Window window(1600, 900, "Thesis Renderer");
 
     gpu::ContextOptions contextOptions;
     contextOptions.validation = options.validation;
     contextOptions.instanceExtensions = Window::requiredInstanceExtensions();
+    // C++ REFRESHER: `[&](VkInstance instance) { ... }` is a lambda function (an inline callback)
+    // that captures local variables (`window`) by reference (`&`).
     contextOptions.createSurface = [&](VkInstance instance) { return window.createSurface(instance); };
     const gpu::Context context(contextOptions);
 
-    // Scene and tracers. Every tracer is built up front, so switching is instant.
+    // 2. Build the scene on the CPU (`makeScene`), upload it once to GPU memory (`GpuScene::upload`),
+    //    and prepare every registered tracer up front so pressing Tab switches tracers instantly.
     const core::Scene scene = makeScene(options);
     const tracing::GpuScene gpuScene = tracing::GpuScene::upload(context, scene);
     const tracing::TracerRegistry registry = makeTracerRegistry();
@@ -65,6 +73,7 @@ int runInteractive(const Options& options)
         facts.tracers.push_back({name, tracers.back()->memoryBytes(), report.gpuMilliseconds});
     }
 
+    // 3. Set up the Vulkan swapchain presenter and Dear ImGui overlay panel.
     Presenter presenter(context, window);
     Gui gui(context, window, presenter.format(), presenter.imageCount());
     ControlPanel panel(std::move(facts), core::OrbitCamera::framing(scene.bounds),
@@ -72,10 +81,11 @@ int runInteractive(const Options& options)
     metrics::TracySink tracySink;
     std::uint64_t frameIndex = 0;
 
+    // 4. Main render loop: runs once per displayed frame until the user closes the window.
     while (!window.shouldClose()) {
         window.pollEvents();
 
-        // The previous frame has finished on the GPU, so its timings can be read.
+        // Wait until the previous frame's GPU commands have finished, then read its GPU timer queries.
         if (presenter.waitForPreviousFrame()) {
             const std::vector<gpu::StageTiming> timings = pipeline.collectTimings();
             panel.recordTimings(timings);
@@ -86,16 +96,20 @@ int runInteractive(const Options& options)
             tracySink.recordFrame(sample);
         }
 
+        // Acquire the next window image and start recording a new Vulkan command buffer (`*cmd`).
         const std::optional<VkCommandBuffer> cmd = presenter.beginFrame();
         if (!cmd) {
             gui.swapchainRebuilt();
             continue;
         }
 
+        // Update camera/UI state from mouse and keyboard input.
         gui.newFrame();
         panel.handleInput();
         panel.draw();
 
+        // Record the 3-stage ray tracing pipeline (`begin` -> `trace` -> `shade`) into `*cmd`,
+        // then copy the shaded image to the window and draw the ImGui control panel on top.
         pipeline.begin(*cmd);
         pipeline.trace(*cmd, *tracers[panel.activeTracer()], panel.camera().frame(pipeline.aspectRatio()));
         pipeline.shade(*cmd, panel.shading());

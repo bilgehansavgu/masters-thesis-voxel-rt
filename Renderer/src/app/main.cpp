@@ -1,9 +1,13 @@
+// ============================================================================
+// READING ORDER: FILE 17 (Program entry point: parses CLI flags and picks a mode)
+// ============================================================================
+
 #include "Benchmark.h"
 #include "Interactive.h"
 #include "Options.h"
 #include "SceneSetup.h"
 
-#include <CLI/CLI.hpp>
+#include <CLI/CLI.hpp> // CLI11 library for parsing command-line arguments (--benchmark, --width, etc.)
 
 #include <cstdio>
 #include <exception>
@@ -43,6 +47,7 @@ int main(int argc, char** argv)
             }
             return 0;
         }
+        // Run either headless benchmark mode (`Benchmark.cpp`) or interactive window mode (`Interactive.cpp`).
         return options.benchmark ? thesis::app::runBenchmark(options) : thesis::app::runInteractive(options);
     } catch (const std::exception& error) {
         std::fprintf(stderr, "error: %s\n", error.what());

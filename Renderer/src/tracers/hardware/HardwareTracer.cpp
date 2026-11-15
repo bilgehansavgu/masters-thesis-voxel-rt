@@ -1,9 +1,22 @@
+// ============================================================================
+// READING ORDER: FILE 15C (C++ side of the Hardware Ray Tracer — BLAS & TLAS)
+// ============================================================================
 // Hardware tracer: the GPU builds and walks its own search structure (a BVH) in the ray
 // tracing cores; our code only answers "where does this ray hit inside this primitive's box?".
 //
 // Uses ray queries from a compute shader (VK_KHR_ray_query): same shader stage and dispatch as
 // the software tracer, so the comparison isolates the search structure. A ray tracing
 // pipeline variant (intersection shaders, as in OptiX) can be added later as another plugin.
+//
+// RAY TRACING BASICS: What are BLAS and TLAS?
+// Vulkan (and DirectX / OptiX) splits its hardware Bounding Volume Hierarchy into two levels:
+//   1. Bottom-Level Acceleration Structure (BLAS):
+//      Built directly over the geometry of an object — in our case, the array of AABBs
+//      (`scene.primitiveBounds`) for all boxes/bricks in the scene.
+//   2. Top-Level Acceleration Structure (TLAS):
+//      Built over "instances" of one or more BLASes, each with a 3x4 world transform matrix.
+//      Even when our scene has only a single non-moved object, Vulkan hardware ray tracing
+//      requires a TLAS on top of the BLAS; shaders always trace rays against the TLAS (`topLevel_`).
 
 #include "thesis/core/GpuTypes.h"
 #include "thesis/gpu/AccelerationStructure.h"
@@ -23,7 +36,7 @@
 namespace thesis::tracers {
 namespace {
 
-constexpr std::uint32_t kGroupSize = 64; // matches [numthreads] in trace_hardware.slang
+constexpr std::uint32_t kGroupSize = 64; // matches [numthreads(64, 1, 1)] in trace_hardware.slang
 constexpr std::uint32_t kSceneBinding = THESIS_BINDING_HARDWARE_SCENE;
 
 // The GPU's search-structure builder reads the scene's bounds buffer directly, as an array of
@@ -55,7 +68,10 @@ public:
         const gpu::Context& context = environment_.gpu;
         scene_ = &scene;
 
-        // Bottom level: one box per primitive, read straight from the scene's bounds buffer.
+        // Step 1: Build the Bottom-Level Acceleration Structure (BLAS).
+        // Tell Vulkan that our geometry is an array of procedural AABBs (`VK_GEOMETRY_TYPE_AABBS_KHR`)
+        // living at GPU memory address `scene.primitiveBounds.address()`, with 32 bytes (`sizeof(core::Aabb)`)
+        // between the start of one box and the next.
         VkAccelerationStructureGeometryKHR boxes{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
         boxes.geometryType = VK_GEOMETRY_TYPE_AABBS_KHR;
         boxes.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
@@ -66,7 +82,9 @@ public:
             context, VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, boxes, scene.primitiveCount,
             VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR);
 
-        // Top level: a single instance of the bottom level with an identity transform.
+        // Step 2: Build the Top-Level Acceleration Structure (TLAS).
+        // Create a single `VkAccelerationStructureInstanceKHR` pointing to `bottom.structure.address()`
+        // with an identity 3x4 transform matrix (1s on the diagonal = no rotation/translation/scaling).
         VkAccelerationStructureInstanceKHR instance{};
         instance.transform.matrix[0][0] = 1.0f;
         instance.transform.matrix[1][1] = 1.0f;
@@ -92,9 +110,16 @@ public:
             gpu::buildAccelerationStructure(context, VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, instanceGeometry, 1,
                                             VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR);
 
+        // C++ REFRESHER: `std::move` transfers ownership of the GPU buffers inside `bottom` and `top`
+        // into our member variables `bottomLevel_` and `topLevel_` without copying them.
         bottomLevel_ = std::move(bottom.structure);
         topLevel_ = std::move(top.structure);
 
+        // Step 3: Load the `trace_hardware.<primitiveKind>.spv` shader and declare its bindings:
+        //   - Slot 0: input ray list
+        //   - Slot 1: output hit list
+        //   - Slot 2: the hardware TLAS (`VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR`)
+        //   - Slots 8..15: primitive bounds and any extra primitive data buffers
         std::vector<gpu::KernelBinding> bindings{{tracing::kRayBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
                                                  {tracing::kHitBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
                                                  {kSceneBinding, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR}};
@@ -131,8 +156,8 @@ public:
 private:
     tracing::TracerEnvironment environment_;
     const tracing::GpuScene* scene_ = nullptr;
-    gpu::AccelerationStructure bottomLevel_;
-    gpu::AccelerationStructure topLevel_;
+    gpu::AccelerationStructure bottomLevel_; // must stay alive while topLevel_ references it
+    gpu::AccelerationStructure topLevel_;    // bound to slot 2 in trace()
     std::optional<gpu::ComputeKernel> kernel_;
 };
 

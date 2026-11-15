@@ -6,14 +6,17 @@
 
 #include "thesis/core/BoxField.h"
 #include "thesis/core/Camera.h"
+#include "thesis/encodings/BuiltInEncodings.h"
 #include "thesis/gpu/Barriers.h"
 #include "thesis/gpu/Buffer.h"
 #include "thesis/gpu/Context.h"
+#include "thesis/mesh/TriangleMesh.h"
 #include "thesis/tracers/BuiltInTracers.h"
 #include "thesis/tracing/Bindings.h"
 #include "thesis/tracing/GpuScene.h"
 #include "thesis/tracing/RayBatch.h"
 #include "thesis/tracing/Tracer.h"
+#include "thesis/voxel/Voxelizer.h"
 #include "thesis/workloads/CameraRays.h"
 
 #include <catch2/catch_approx.hpp>
@@ -74,17 +77,10 @@ HitFindingTracers makeHitFindingTracers(const gpu::Context& context, const traci
     return result;
 }
 
-} // namespace
-
-TEST_CASE("all tracers agree on the box field", "[gpu][agreement]")
+// Sends the same camera rays from several viewpoints through every tracer that finds hits and
+// compares the hit lists.
+void checkTracersAgree(const gpu::Context& context, const core::Scene& scene)
 {
-    gpu::ContextOptions options;
-    options.applicationName = "Thesis agreement test";
-    options.validation = true;
-    const gpu::Context context(options);
-    const std::uint64_t validationBefore = gpu::validationMessageCount();
-
-    const core::Scene scene = core::makeBoxField({});
     const tracing::GpuScene gpuScene = tracing::GpuScene::upload(context, scene);
 
     const HitFindingTracers set = makeHitFindingTracers(context, gpuScene);
@@ -135,6 +131,45 @@ TEST_CASE("all tracers agree on the box field", "[gpu][agreement]")
                 WARN("Wrote " << stem << "*.ppm to the working directory");
             }
         }
+    }
+}
+
+} // namespace
+
+TEST_CASE("all tracers agree on the box field", "[gpu][agreement]")
+{
+    gpu::ContextOptions options;
+    options.applicationName = "Thesis agreement test";
+    options.validation = true;
+    const gpu::Context context(options);
+    const std::uint64_t validationBefore = gpu::validationMessageCount();
+
+    checkTracersAgree(context, core::makeBoxField({}));
+
+    CHECK(gpu::validationMessageCount() == validationBefore);
+}
+
+// The brick kinds go through the same check. In step 1 their shader code stops at the box of
+// each brick, so this proves the path around it: every tracer finds the shader of each kind,
+// and the buffers of each encoding upload, bind and pass the validation layer.
+TEST_CASE("all tracers agree on an encoded voxel model", "[gpu][agreement]")
+{
+    gpu::ContextOptions options;
+    options.applicationName = "Thesis agreement test";
+    options.validation = true;
+    const gpu::Context context(options);
+    const std::uint64_t validationBefore = gpu::validationMessageCount();
+
+    const voxel::VoxelModel model =
+        voxel::voxelize(mesh::makeSphere({0.0f, 0.0f, 0.0f}, 1.0f, 48), {64, 8, voxel::VoxelizationRule::Sampled});
+    encoding::EncodingRegistry encodings;
+    plugins::registerBuiltInEncodings(encodings);
+    REQUIRE_FALSE(encodings.names().empty());
+    for (const std::string& name : encodings.names()) {
+        INFO("encoding " << name);
+        const core::Scene scene = encodings.create(name)->encode(model).scene;
+        REQUIRE(scene.primitiveData.size() >= 4);
+        checkTracersAgree(context, scene);
     }
 
     CHECK(gpu::validationMessageCount() == validationBefore);

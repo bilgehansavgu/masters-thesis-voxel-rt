@@ -1,0 +1,11 @@
+thesis_add_library(voxel
+    SOURCES
+        OctNormal.cpp
+        VoxelFile.cpp
+        VoxelModel.cpp
+        Voxelizer.cpp
+    PUBLIC_DEPS
+        thesis::mesh
+        glm::glm
+    PRIVATE_DEPS
+        nlohmann_json::nlohmann_json)

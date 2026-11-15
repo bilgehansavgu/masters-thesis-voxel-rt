@@ -17,7 +17,9 @@ include(ThesisShaders)
 
 # Primitive kinds the tracers are compiled for. Each kind is a folder in shaders/primitives/
 # that implements the primitive contract (see shaders/primitives/box/primitive.slang).
-set(THESIS_PRIMITIVE_KINDS box CACHE STRING "Primitive kinds every tracer shader is compiled for")
+# An encoding (src/encodings/) has a kind of the same name.
+unset(THESIS_PRIMITIVE_KINDS CACHE)
+set(THESIS_PRIMITIVE_KINDS box brick2012_inline brick2012_split)
 
 find_package(Vulkan REQUIRED)
 find_package(vk-bootstrap CONFIG REQUIRED)
@@ -29,6 +31,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
 find_package(CLI11 CONFIG REQUIRED)
 find_package(Catch2 3 CONFIG REQUIRED)
+find_package(unofficial-miniply CONFIG REQUIRED)
 
 enable_testing()
 include(ThesisFormat)

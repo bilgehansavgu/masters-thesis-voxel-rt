@@ -120,7 +120,9 @@ int runBenchmark(const Options& options)
         std::printf("note: validation is on, timings are not representative\n");
     }
 
-    const core::Scene scene = makeScene(options);
+    const SceneSource source(options);
+    const BuiltScene built = source.build(source.initialEncoding());
+    const core::Scene& scene = built.scene;
     const tracing::GpuScene gpuScene = tracing::GpuScene::upload(context, scene);
     const tracing::TracerRegistry registry = makeTracerRegistry();
     const std::vector<std::string> tracerNames = selectTracers(registry, options.tracers);
@@ -134,6 +136,11 @@ int runBenchmark(const Options& options)
     std::printf("GPU: %s (driver %s)\n", context.info().name.c_str(), context.info().driverInfo.c_str());
     std::printf("Scene: %s, %u primitives; %ux%u = %llu rays per frame\n", scene.name.c_str(), gpuScene.primitiveCount,
                 options.width, options.height, static_cast<unsigned long long>(rayCount));
+    if (!built.encoding.empty()) {
+        std::printf("Encoding: %s, %.2f MiB on the GPU, %.2f bits per voxel (%s)\n", built.encoding.c_str(),
+                    static_cast<double>(built.memory.totalBytes) / (1024.0 * 1024.0),
+                    built.memory.bitsPerVoxel(built.voxels), built.details.c_str());
+    }
     std::printf("Protocol: warm-up %.0f-%.0f s until the GPU clock settles, then %u repeats x %u frames\n\n",
                 options.warmupSeconds, options.warmupMaxSeconds, options.repeats, options.frames);
     std::printf("%-10s %10s %10s %10s %10s %10s %8s\n", "tracer", "median ms", "min ms", "max ms", "Mrays/s",
@@ -150,15 +157,31 @@ int runBenchmark(const Options& options)
         }
 
         const auto tracer = registry.create(tracerName, environment);
-        const tracing::PrepareReport prepared = tracer->prepare(gpuScene);
+        tracing::PrepareReport prepared;
+        try {
+            prepared = tracer->prepare(gpuScene);
+        } catch (const tracing::UnsupportedScene& reason) {
+            if (!options.tracers.empty()) {
+                throw; // the user asked for this tracer by name
+            }
+            std::printf("%-10s skipped: %s\n", tracerName.c_str(), reason.what());
+            continue;
+        }
 
         nlohmann::json run;
         run["schema"] = "thesis-benchmark/1";
         run["tracer"] = tracerName;
         run["build"] = metrics::buildInfo();
         run["device"] = describeDevice(context);
-        run["scene"] = {
-            {"name", scene.name}, {"primitive_kind", scene.primitiveKind}, {"primitives", gpuScene.primitiveCount}};
+        run["scene"] = {{"name", scene.name},
+                        {"primitive_kind", scene.primitiveKind},
+                        {"primitives", gpuScene.primitiveCount},
+                        {"details", built.details},
+                        {"encoding", built.encoding},
+                        {"voxels", built.voxels},
+                        {"encode_seconds", built.encodeSeconds},
+                        {"memory", built.memory.toJson(built.voxels)},
+                        {"statistics", built.statistics}};
         run["config"] = {{"width", options.width},
                          {"height", options.height},
                          {"rays_per_frame", rayCount},
@@ -197,7 +220,9 @@ int runBenchmark(const Options& options)
         run["system_after_warmup"] = metrics::captureSystemState();
 
         metrics::TracySink tracySink;
-        metrics::JsonReportSink fileSink(options.outputDirectory / (stamp + "_" + tracerName + ".json"));
+        const std::string encodingSuffix = built.encoding.empty() ? "" : "_" + built.encoding;
+        metrics::JsonReportSink fileSink(options.outputDirectory /
+                                         (stamp + "_" + tracerName + encodingSuffix + ".json"));
         metrics::MetricFanout sinks({&tracySink, &fileSink});
         sinks.beginRun(run);
 

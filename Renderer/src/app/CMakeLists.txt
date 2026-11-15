@@ -26,6 +26,9 @@ target_link_libraries(thesis_renderer PRIVATE
     thesis::resolve
     thesis::metrics
     thesis::tracer_plugins
+    thesis::voxel
+    thesis::encoding
+    thesis::encoding_plugins
     thesis::profiling
     glfw
     imgui::imgui

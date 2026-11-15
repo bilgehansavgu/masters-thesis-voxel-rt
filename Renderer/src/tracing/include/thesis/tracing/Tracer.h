@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <stdexcept>
 #include <string_view>
 
 namespace thesis::gpu {
@@ -29,6 +30,13 @@ struct PrepareReport {
     std::uint64_t scratchBytes = 0; // temporary memory the build needed
 };
 
+// Thrown by ITracer::prepare() when a tracer cannot handle a scene (for example too many
+// primitives for a tracer without a search structure). The message says why.
+class UnsupportedScene : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
 // THE TRACER SOCKET. One rule: a list of rays goes in, a list of hits comes out.
 //
 // A tracer owns how rays find primitives (its search structure); it does not own the rays,
@@ -41,7 +49,8 @@ public:
     [[nodiscard]] virtual std::string_view name() const = 0;
 
     // Builds whatever the tracer needs for `scene` and blocks until it is ready. `scene` must
-    // outlive the tracer or the next prepare() call.
+    // outlive the tracer or the next prepare() call. Throws UnsupportedScene if the tracer
+    // cannot handle the scene.
     virtual PrepareReport prepare(const GpuScene& scene) = 0;
 
     // Records commands that read batch.rays and write batch.hits for every ray. The caller

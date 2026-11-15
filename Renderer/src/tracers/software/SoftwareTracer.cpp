@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -17,6 +18,10 @@ namespace thesis::tracers {
 namespace {
 
 constexpr std::uint32_t kGroupSize = 64; // matches [numthreads] in trace_software.slang
+
+// Every ray tests every primitive. Above this count one frame at 1920x1080 takes so long that
+// Windows resets the GPU driver (it allows a single GPU job about two seconds).
+constexpr std::uint32_t kMaxPrimitives = 30000;
 
 struct TraceParams {
     std::uint32_t rayCount;
@@ -33,6 +38,11 @@ public:
 
     tracing::PrepareReport prepare(const tracing::GpuScene& scene) override
     {
+        if (scene.primitiveCount > kMaxPrimitives) {
+            throw tracing::UnsupportedScene("the software tracer tests every primitive for every ray and stops at " +
+                                            std::to_string(kMaxPrimitives) + " primitives; this scene has " +
+                                            std::to_string(scene.primitiveCount));
+        }
         scene_ = &scene;
         std::vector<gpu::KernelBinding> bindings{{tracing::kRayBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
                                                  {tracing::kHitBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}};

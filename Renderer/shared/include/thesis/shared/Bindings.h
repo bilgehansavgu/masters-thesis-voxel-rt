@@ -19,6 +19,13 @@
 #define THESIS_BINDING_PRIMITIVE_DATA_FIRST 9  /* 9..15: the primitive kind's own data */
 #define THESIS_BINDING_PRIMITIVE_DATA_LAST 15
 
+/* Primitive kinds brick2012_inline and brick2012_split (the layouts are in Brick2012.h). */
+#define THESIS_BINDING_BRICK_HEADER 9       /* one BrickModelHeader */
+#define THESIS_BINDING_BRICK_TABLE 10       /* one BrickRecord per brick */
+#define THESIS_BINDING_BRICK_CELLS 11       /* the primary grid cells of all bricks */
+#define THESIS_BINDING_BRICK_INDIRECTION 12 /* 16-bit words: the runs of columns with more than one voxel */
+#define THESIS_BINDING_BRICK_ATTRIBUTES 13  /* split layout only: one 16-bit normal per voxel */
+
 /* Shading kernel (descriptor set 0). */
 #define THESIS_BINDING_SHADE_HITS 0
 #define THESIS_BINDING_SHADE_OUTPUT 1

@@ -25,10 +25,32 @@ std::string formatBytes(std::uint64_t bytes)
 
 } // namespace
 
-ControlPanel::ControlPanel(PanelFacts facts, const core::OrbitCamera& initialCamera, std::size_t initialTracer)
-    : facts_(std::move(facts)), initialCamera_(initialCamera), camera_(initialCamera), activeTracer_(initialTracer)
+ControlPanel::ControlPanel(PanelFacts facts, const core::OrbitCamera& initialCamera, std::size_t initialTracer,
+                           std::size_t initialEncoding)
+    : facts_(std::move(facts)),
+      initialCamera_(initialCamera),
+      camera_(initialCamera),
+      activeTracer_(initialTracer),
+      activeEncoding_(initialEncoding)
 {
     shading_.distanceFar = 2.0f * initialCamera.distance;
+}
+
+void ControlPanel::setFacts(PanelFacts facts)
+{
+    const std::string previous = facts_.tracers.at(activeTracer_).name;
+    facts_ = std::move(facts);
+    const auto same = std::find_if(facts_.tracers.begin(), facts_.tracers.end(),
+                                   [&](const PanelFacts::Tracer& tracer) { return tracer.name == previous; });
+    activeTracer_ = same == facts_.tracers.end() ? 0 : static_cast<std::size_t>(same - facts_.tracers.begin());
+    traceMs_ = {}; // the old average belongs to the old scene
+}
+
+void ControlPanel::selectNextEncoding()
+{
+    if (!facts_.encodings.empty()) {
+        activeEncoding_ = (activeEncoding_ + 1) % facts_.encodings.size();
+    }
 }
 
 void ControlPanel::handleInput()
@@ -46,6 +68,9 @@ void ControlPanel::handleInput()
     if (!io.WantCaptureKeyboard) {
         if (ImGui::IsKeyPressed(ImGuiKey_Tab) && !facts_.tracers.empty()) {
             activeTracer_ = (activeTracer_ + 1) % facts_.tracers.size();
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_E)) {
+            selectNextEncoding();
         }
         const ImGuiKey modeKeys[] = {ImGuiKey_1, ImGuiKey_2, ImGuiKey_3, ImGuiKey_4};
         for (std::size_t mode = 0; mode < std::size(modeKeys); ++mode) {
@@ -75,7 +100,7 @@ void ControlPanel::draw()
     const PanelFacts::Tracer& tracer = facts_.tracers.at(activeTracer_);
 
     ImGui::SetNextWindowPos({10, 10}, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize({360, 0}, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize({400, 0}, ImGuiCond_FirstUseEver);
     ImGui::Begin("Renderer");
 
     if (ImGui::BeginCombo("Tracer (Tab)", tracer.name.c_str())) {
@@ -85,6 +110,22 @@ void ControlPanel::draw()
             }
         }
         ImGui::EndCombo();
+    }
+    for (const std::string& skipped : facts_.skippedTracers) {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("Not available: %s", skipped.c_str());
+        ImGui::PopTextWrapPos();
+    }
+    if (!facts_.encodings.empty()) {
+        // The scene shown belongs to the encoding in facts_; the choice takes effect next frame.
+        if (ImGui::BeginCombo("Encoding (E)", facts_.encodings.at(activeEncoding_).c_str())) {
+            for (std::size_t i = 0; i < facts_.encodings.size(); ++i) {
+                if (ImGui::Selectable(facts_.encodings[i].c_str(), i == activeEncoding_)) {
+                    activeEncoding_ = i;
+                }
+            }
+            ImGui::EndCombo();
+        }
     }
     int mode = static_cast<int>(shading_.mode);
     if (ImGui::Combo("View (1-4)", &mode, resolve::kShadingModeNames.data(),
@@ -105,13 +146,31 @@ void ControlPanel::draw()
 
     ImGui::SeparatorText("Scene");
     ImGui::Text("%s", facts_.sceneName.c_str());
-    ImGui::Text("%u primitives, %ux%u rays", facts_.primitiveCount, facts_.width, facts_.height);
+    ImGui::Text("%s", facts_.sceneDetails.c_str());
+    if (facts_.voxelCount > 0) {
+        ImGui::Text("%llu voxels in %u bricks", static_cast<unsigned long long>(facts_.voxelCount),
+                    facts_.primitiveCount);
+    } else {
+        ImGui::Text("%u primitives", facts_.primitiveCount);
+    }
+    ImGui::Text("%ux%u rays", facts_.width, facts_.height);
 
-    ImGui::SeparatorText("Memory");
-    ImGui::Text("scene            %s", formatBytes(facts_.sceneBytes).c_str());
-    ImGui::Text("search structure %s", formatBytes(tracer.memoryBytes).c_str());
-    ImGui::Text("rays + hits      %s", formatBytes(facts_.rayAndHitBytes).c_str());
-    ImGui::Text("build time       %.3f ms", tracer.buildMilliseconds);
+    ImGui::SeparatorText("Scene memory on the GPU");
+    for (const PanelFacts::SceneBuffer& buffer : facts_.sceneBuffers) {
+        ImGui::Text("%-16s %s", buffer.name.c_str(), formatBytes(buffer.bytes).c_str());
+    }
+    if (facts_.voxelCount > 0) {
+        ImGui::Text("%-16s %s  (%.2f bits per voxel)", "total", formatBytes(facts_.sceneBytes).c_str(),
+                    8.0 * static_cast<double>(facts_.sceneBytes) / static_cast<double>(facts_.voxelCount));
+        ImGui::Text("%-16s %.1f ms", "encode time", facts_.encodeMilliseconds);
+    } else {
+        ImGui::Text("%-16s %s", "total", formatBytes(facts_.sceneBytes).c_str());
+    }
+
+    ImGui::SeparatorText("Tracer memory");
+    ImGui::Text("%-16s %s", "search structure", formatBytes(tracer.memoryBytes).c_str());
+    ImGui::Text("%-16s %s", "rays + hits", formatBytes(facts_.rayAndHitBytes).c_str());
+    ImGui::Text("%-16s %.3f ms", "build time", tracer.buildMilliseconds);
 
     ImGui::SeparatorText("Camera");
     ImGui::TextDisabled("Drag to orbit, scroll to zoom");

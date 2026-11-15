@@ -75,3 +75,6 @@ Testing/
 .vs/
 .idea/
 .claude/settings.local.json
+
+# 3D models and voxel files: large downloads and generated data (see Renderer/README.md)
+/Models/

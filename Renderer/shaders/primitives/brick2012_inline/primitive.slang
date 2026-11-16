@@ -1,25 +1,48 @@
 // Primitive kind "brick2012_inline": one primitive is one voxel brick in the 2012 format, with
-// the attributes next to the heights. Encoder: src/encodings/brick2012. Bit layout:
-// shared/include/thesis/shared/Brick2012.h. The primitive contract is in ../box/primitive.slang.
+// the attributes next to the heights (the order of the paper). Encoder: src/encodings/brick2012.
+// Bit layout: thesis/shared/Brick2012.h. The primitive contract is in ../box/primitive.slang.
 //
-// STEP 1 STATE: the test stops at the box around the filled voxels of the brick, so the image
-// shows the bricks, not the voxels. The buffers of the encoding (bindings 9..12) are uploaded
-// and bound, but nothing reads them yet. Step 2 adds the walk through the primary grid.
+// The test itself is in shaders/common/brick2012.slang and is the same for every layout of the
+// 2012 format. This file only says where the inline layout keeps its bits.
 
 import types;
-import aabb;
-#include "thesis/shared/Bindings.h"
+import work;
+import brick2012;
+#include "thesis/shared/Brick2012.h"
 
-[[vk::binding(THESIS_BINDING_PRIMITIVE_BOUNDS, 0)]]
-StructuredBuffer<Aabb> gPrimitiveBounds;
-
-public struct PrimitiveHit
+struct InlineLayout : IBrickLayout
 {
-    public float t;
-    public uint  face;
+    // A cell is one 32-bit word.
+    static uint cell(BrickRecord brick, uint index)
+    {
+        return gBrickCells[brick.cellBase + index];
+    }
+
+    // A pointer cell holds the offset of the run words of its column.
+    static uint firstRunWord(BrickRecord brick, uint cell)
+    {
+        return brick.indirectionBase + (cell >> THESIS_CELL_OFFSET_SHIFT);
+    }
+
+    // The normal is in the cell, next to the height.
+    static uint heightCellNormal(BrickRecord brick, uint brickSize, uint index, uint cell)
+    {
+        return (cell >> THESIS_CELL_NORMAL_SHIFT) & THESIS_CELL_NORMAL_MASK;
+    }
+
+    // The normals of a column follow its run words, one for each voxel.
+    static uint pointerCellNormal(BrickRecord brick, uint cell, uint runCount, uint voxel)
+    {
+        return word16(gBrickIndirection, firstRunWord(brick, cell) + runCount + voxel);
+    }
 };
 
-public bool intersectPrimitive(Ray ray, uint primitiveId, out PrimitiveHit hit)
+public bool intersectPrimitive(Ray ray, uint primitiveId, out PrimitiveHit hit, inout WorkCounter work)
 {
-    return intersectAabb(ray, gPrimitiveBounds[primitiveId], hit.t, hit.face);
+    return intersectBrick<InlineLayout>(ray, primitiveId, hit, work);
+}
+
+public uint primitiveAttributes(uint primitiveId, PrimitiveHit hit, inout WorkCounter work)
+{
+    return brickAttributes<InlineLayout>(primitiveId, hit, work);
 }

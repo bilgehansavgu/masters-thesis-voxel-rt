@@ -3,6 +3,9 @@
 #include <vk_mem_alloc.h>
 #include <vulkan/vulkan.h>
 
+#include <cstddef>
+#include <vector>
+
 namespace thesis::gpu {
 
 class Context;
@@ -38,5 +41,9 @@ private:
     VkPipelineStageFlags2 lastStage_ = VK_PIPELINE_STAGE_2_NONE;
     VkAccessFlags2 lastAccess_ = VK_ACCESS_2_NONE;
 };
+
+// Copies the pixels of an image to the CPU, row by row from the top (blocks). Waits for all
+// previously submitted GPU work. The image is left in TRANSFER_SRC layout.
+[[nodiscard]] std::vector<std::byte> downloadImage(const Context& context, StorageImage& image);
 
 } // namespace thesis::gpu

@@ -2,6 +2,7 @@
 // This is the regression test for every future tracer and encoding. Needs a GPU with
 // hardware ray tracing; runs with the validation layer on and fails on any validation message.
 
+#include "GpuTestHelpers.h"
 #include "HitComparison.h"
 
 #include "thesis/core/BoxField.h"
@@ -37,53 +38,13 @@ constexpr float kRelativeTolerance = 1e-4f;
 constexpr double kMaxDisagreementFraction = 1e-4; // at most 1 ray in 10,000
 constexpr double kMaxPrimitiveMismatchFraction = 1e-3;
 
-std::vector<core::Hit> traceAndRead(const gpu::Context& context, const workloads::CameraRays& rays,
-                                    tracing::ITracer& tracer, const core::CameraFrame& camera,
-                                    const tracing::RayBatch& batch)
-{
-    context.submitAndWait([&](VkCommandBuffer cmd) {
-        rays.generate(cmd, camera, batch);
-        gpu::computeToComputeBarrier(cmd);
-        tracer.trace(cmd, batch);
-    });
-    const std::vector<std::byte> bytes = gpu::downloadBuffer(context, batch.hits);
-    std::vector<core::Hit> hits(batch.count());
-    std::memcpy(hits.data(), bytes.data(), hits.size() * sizeof(core::Hit));
-    return hits;
-}
-
-// Every registered tracer that finds hits (baselines such as the null tracer are skipped),
-// prepared for `scene`.
-struct HitFindingTracers {
-    std::vector<std::string> names;
-    std::vector<std::unique_ptr<tracing::ITracer>> tracers;
-};
-
-HitFindingTracers makeHitFindingTracers(const gpu::Context& context, const tracing::GpuScene& scene)
-{
-    tracing::TracerRegistry registry;
-    plugins::registerBuiltInTracers(registry);
-    const tracing::TracerEnvironment environment{context, THESIS_DEFAULT_SHADER_DIR};
-    HitFindingTracers result;
-    for (const std::string& name : registry.names()) {
-        auto tracer = registry.create(name, environment);
-        if (!tracer->findsHits()) {
-            continue;
-        }
-        tracer->prepare(scene);
-        result.names.push_back(name);
-        result.tracers.push_back(std::move(tracer));
-    }
-    return result;
-}
-
 // Sends the same camera rays from several viewpoints through every tracer that finds hits and
 // compares the hit lists.
 void checkTracersAgree(const gpu::Context& context, const core::Scene& scene)
 {
     const tracing::GpuScene gpuScene = tracing::GpuScene::upload(context, scene);
 
-    const HitFindingTracers set = makeHitFindingTracers(context, gpuScene);
+    const tests::HitFindingTracers set = tests::makeHitFindingTracers(context, gpuScene);
     const std::vector<std::string>& names = set.names;
     const auto& tracers = set.tracers;
     REQUIRE(names.size() >= 2);
@@ -91,35 +52,26 @@ void checkTracersAgree(const gpu::Context& context, const core::Scene& scene)
     const workloads::CameraRays cameraRays(context, THESIS_DEFAULT_SHADER_DIR);
     const tracing::RayBatch batch = tracing::RayBatch::create(context, 640, 480);
 
-    const core::OrbitCamera framing = core::OrbitCamera::framing(scene.bounds);
-    struct Viewpoint {
-        float yaw;
-        float pitch;
-        float distanceScale;
-    };
-    const Viewpoint viewpoints[] = {
+    const tests::Viewpoint viewpoints[] = {
         {35.0f, 30.0f, 0.7f}, {125.0f, 10.0f, 0.5f}, {220.0f, 60.0f, 0.6f}, {300.0f, 5.0f, 0.35f}, {0.0f, 89.0f, 0.6f}};
 
-    for (const Viewpoint& viewpoint : viewpoints) {
-        core::OrbitCamera camera = framing;
-        camera.yawDegrees = viewpoint.yaw;
-        camera.pitchDegrees = viewpoint.pitch;
-        camera.distance *= viewpoint.distanceScale;
-        const core::CameraFrame frame = camera.frame(4.0f / 3.0f);
+    for (const tests::Viewpoint& viewpoint : viewpoints) {
+        const core::CameraFrame frame = tests::cameraFrame(scene.bounds, viewpoint, 4.0f / 3.0f);
+        (void)tests::generateRays(context, cameraRays, frame, batch);
 
-        const std::vector<core::Hit> reference = traceAndRead(context, cameraRays, *tracers[0], frame, batch);
+        const std::vector<core::Hit> reference = tests::traceRays(context, *tracers[0], batch);
         for (std::size_t i = 1; i < tracers.size(); ++i) {
-            const std::vector<core::Hit> hits = traceAndRead(context, cameraRays, *tracers[i], frame, batch);
+            const std::vector<core::Hit> hits = tests::traceRays(context, *tracers[i], batch);
             const tests::HitComparison result = tests::compareHits(reference, hits, kRelativeTolerance);
 
             INFO(names[0] << " vs " << names[i] << " at yaw " << viewpoint.yaw << ", pitch " << viewpoint.pitch);
             INFO("both hit " << result.bothHit << ", both miss " << result.bothMiss << ", hit vs miss "
                              << result.hitVersusMiss << ", distance mismatch " << result.distanceMismatch
-                             << ", primitive mismatch " << result.primitiveMismatch << ", max relative error "
-                             << result.maxRelativeDistanceError);
+                             << ", primitive mismatch " << result.primitiveMismatch << ", attribute mismatch "
+                             << result.attributeMismatch << ", max relative error " << result.maxRelativeDistanceError);
             const bool inView = result.bothHit > result.rays / 10; // the scene is actually in view
             const bool agree = result.disagreementFraction() <= kMaxDisagreementFraction &&
-                               static_cast<double>(result.primitiveMismatch) <=
+                               static_cast<double>(result.primitiveMismatch + result.attributeMismatch) <=
                                    kMaxPrimitiveMismatchFraction * static_cast<double>(result.rays);
             CHECK(inView);
             CHECK(agree);
@@ -149,9 +101,9 @@ TEST_CASE("all tracers agree on the box field", "[gpu][agreement]")
     CHECK(gpu::validationMessageCount() == validationBefore);
 }
 
-// The brick kinds go through the same check. In step 1 their shader code stops at the box of
-// each brick, so this proves the path around it: every tracer finds the shader of each kind,
-// and the buffers of each encoding upload, bind and pass the validation layer.
+// The brick kinds go through the same check: the tracers must find the same voxels. It tests
+// the search structures. It cannot test the brick test itself, because every tracer runs the
+// same brick test; TestBrickTracing.cpp does that.
 TEST_CASE("all tracers agree on an encoded voxel model", "[gpu][agreement]")
 {
     gpu::ContextOptions options;
@@ -232,20 +184,12 @@ TEST_CASE("tracers return hand-computed hits", "[gpu][known-answer]")
     for (const Case& c : cases) {
         rays.push_back(c.ray);
     }
-    tracing::RayBatch batch;
-    batch.width = static_cast<std::uint32_t>(rays.size());
-    batch.height = 1;
-    batch.rays = gpu::uploadBuffer(context, std::as_bytes(std::span(rays)), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-    batch.hits = gpu::Buffer(context, rays.size() * sizeof(core::Hit), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                             gpu::MemoryUsage::DeviceLocal);
+    const tracing::RayBatch batch = tests::uploadRays(context, rays);
 
-    const HitFindingTracers set = makeHitFindingTracers(context, gpuScene);
+    const tests::HitFindingTracers set = tests::makeHitFindingTracers(context, gpuScene);
     REQUIRE_FALSE(set.tracers.empty());
     for (std::size_t t = 0; t < set.tracers.size(); ++t) {
-        context.submitAndWait([&](VkCommandBuffer cmd) { set.tracers[t]->trace(cmd, batch); });
-        const std::vector<std::byte> bytes = gpu::downloadBuffer(context, batch.hits);
-        std::vector<core::Hit> hits(rays.size());
-        std::memcpy(hits.data(), bytes.data(), bytes.size());
+        const std::vector<core::Hit> hits = tests::traceRays(context, *set.tracers[t], batch);
 
         for (std::size_t i = 0; i < std::size(cases); ++i) {
             const Case& expected = cases[i];

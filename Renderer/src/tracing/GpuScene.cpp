@@ -18,6 +18,7 @@ GpuScene GpuScene::upload(const gpu::Context& context, const core::Scene& scene)
     result.primitiveKind = scene.primitiveKind;
     result.primitiveCount = static_cast<std::uint32_t>(scene.primitiveBounds.size());
     result.bounds = scene.bounds;
+    result.primitiveGrid = scene.primitiveGrid;
     result.primitiveBounds =
         gpu::uploadBuffer(context, std::as_bytes(std::span(scene.primitiveBounds)),
                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |

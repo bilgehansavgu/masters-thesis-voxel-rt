@@ -2,6 +2,7 @@
 #include "Interactive.h"
 #include "Options.h"
 #include "SceneSetup.h"
+#include "Screenshot.h"
 
 #include <CLI/CLI.hpp>
 
@@ -15,9 +16,17 @@ int main(int argc, char** argv)
 
     CLI::App cli{"Thesis renderer: hardware vs software ray tracing behind one tracer socket"};
     cli.add_flag("--benchmark", options.benchmark, "Run the headless benchmark and write results files");
+    cli.add_option("--screenshot", options.screenshot, "Write one frame to this PNG file, without a window");
+    cli.add_option("--view", options.view, "Screenshot: the view, numbered as the keys 1-9 in the window")
+        ->check(CLI::Range(1, 9));
+    cli.add_option("--camera", options.camera,
+                   "Camera at the start: yaw and pitch in degrees, then the distance as a factor of the "
+                   "distance that shows the whole scene. Benchmark: the start and the radius of the orbit")
+        ->expected(3);
     cli.add_flag("--list-tracers", options.listTracers, "List the tracers built into this program");
     cli.add_flag("--list-encodings", options.listEncodings, "List the encodings built into this program");
-    cli.add_option("--tracer", options.tracers, "Tracer(s) to use; benchmark default: all");
+    cli.add_option("--tracer", options.tracers,
+                   "Tracer(s) to use; benchmark default: all; screenshot default: hardware");
     cli.add_option("--model", options.model, "Voxel file (.voxels, written by thesis_model) to show")
         ->check(CLI::ExistingFile);
     cli.add_option("--encoding", options.encoding, "Encoding of the voxel model; window: the one shown first");
@@ -55,6 +64,9 @@ int main(int argc, char** argv)
                 std::printf("%-18s %s\n", entry.name.c_str(), entry.description.c_str());
             }
             return 0;
+        }
+        if (!options.screenshot.empty()) {
+            return thesis::app::runScreenshot(options);
         }
         return options.benchmark ? thesis::app::runBenchmark(options) : thesis::app::runInteractive(options);
     } catch (const std::exception& error) {

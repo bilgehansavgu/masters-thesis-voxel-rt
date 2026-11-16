@@ -20,6 +20,7 @@
     "glm",
     "cli11",
     "catch2",
-    "miniply"
+    "miniply",
+    "stb"
   ]
 }

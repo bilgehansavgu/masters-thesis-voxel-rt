@@ -10,6 +10,7 @@ namespace thesis::app {
 struct Options {
     // What to run
     bool benchmark = false;
+    std::filesystem::path screenshot; // not empty: write one frame to this PNG file, no window
     bool listTracers = false;
     bool listEncodings = false;
     std::vector<std::string> tracers; // benchmark: which to run (empty = all); interactive: first one shown
@@ -23,6 +24,11 @@ struct Options {
     // Render resolution: the ray count. Independent of the window size.
     std::uint32_t width = 1920;
     std::uint32_t height = 1080;
+
+    // The camera at the start: yaw and pitch in degrees, then the distance as a factor of the
+    // distance that shows the whole scene. Benchmark: where the orbit starts and how far out it is.
+    std::vector<float> camera{35.0f, 30.0f, 1.0f};
+    std::uint32_t view = 1; // screenshot: the view, numbered as the keys 1-9 in the window
 
     // Benchmark protocol
     double warmupSeconds = 3.0;     // minimum; continues until the GPU clock has settled

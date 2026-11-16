@@ -25,8 +25,11 @@ struct GridVoxel {
 
 // A model with `bricksPerAxis` bricks of `brickSize`, filled where `normalAt` returns a normal
 // for the voxel position. Bricks that stay empty are left out, as the voxelizer does.
+// The default grid does not start at zero and its voxels do not have size 1, so that code which
+// forgets the origin or the voxel size fails.
 [[nodiscard]] voxel::VoxelModel
 makeModel(std::uint32_t brickSize, const glm::uvec3& bricksPerAxis,
-          const std::function<std::optional<std::uint16_t>(const glm::uvec3&)>& normalAt);
+          const std::function<std::optional<std::uint16_t>(const glm::uvec3&)>& normalAt,
+          const glm::vec3& origin = {-1.0f, 2.0f, 0.5f}, float voxelSize = 0.25f);
 
 } // namespace thesis::tests

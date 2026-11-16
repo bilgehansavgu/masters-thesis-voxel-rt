@@ -14,6 +14,8 @@ add_executable(thesis_renderer
     Presenter.h
     SceneSetup.cpp
     SceneSetup.h
+    Screenshot.cpp
+    Screenshot.h
     Window.cpp
     Window.h
     main.cpp)
@@ -33,6 +35,7 @@ target_link_libraries(thesis_renderer PRIVATE
     glfw
     imgui::imgui
     CLI11::CLI11)
+target_include_directories(thesis_renderer SYSTEM PRIVATE ${Stb_INCLUDE_DIR})
 target_compile_definitions(thesis_renderer PRIVATE THESIS_DEFAULT_SHADER_DIR="${THESIS_SHADER_OUTPUT_DIR}")
 set_target_properties(thesis_renderer PROPERTIES
     FOLDER "app"

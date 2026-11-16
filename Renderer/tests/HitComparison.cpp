@@ -35,6 +35,8 @@ HitComparison compareHits(std::span<const core::Hit> a, std::span<const core::Hi
             ++result.primitiveMismatch;
         } else if (a[i].face != b[i].face) {
             ++result.faceMismatch;
+        } else if (a[i].attributes != b[i].attributes) {
+            ++result.attributeMismatch;
         }
     }
     return result;

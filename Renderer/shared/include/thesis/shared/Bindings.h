@@ -11,9 +11,13 @@
 #define THESIS_BINDING_RAYS 0 /* ray list, read */
 #define THESIS_BINDING_HITS 1 /* hit list, write */
 
-#define THESIS_BINDING_TRACER_FIRST 2 /* 2..7 belong to the tracer itself */
-#define THESIS_BINDING_TRACER_LAST 7
-#define THESIS_BINDING_HARDWARE_SCENE 2 /* hardware tracer: the GPU-built search structure */
+#define THESIS_BINDING_TRACER_FIRST 2 /* 2..6 belong to the tracer itself */
+#define THESIS_BINDING_TRACER_LAST 6
+#define THESIS_BINDING_HARDWARE_SCENE 2       /* hardware tracer: the GPU-built search structure */
+#define THESIS_BINDING_SOFTWARE_GRID_CELLS 2  /* software tracer: where the list of each grid cell starts */
+#define THESIS_BINDING_SOFTWARE_GRID_ITEMS 3  /* software tracer: the primitive indices of all cells */
+
+#define THESIS_BINDING_RAY_WORK 7 /* counting variant of a tracer only: one RayWork per ray, write */
 
 #define THESIS_BINDING_PRIMITIVE_BOUNDS 8      /* every primitive kind gets its bounds here */
 #define THESIS_BINDING_PRIMITIVE_DATA_FIRST 9  /* 9..15: the primitive kind's own data */
@@ -29,5 +33,6 @@
 /* Shading kernel (descriptor set 0). */
 #define THESIS_BINDING_SHADE_HITS 0
 #define THESIS_BINDING_SHADE_OUTPUT 1
+#define THESIS_BINDING_SHADE_WORK 2 /* shade_work only: one RayWork per ray, read */
 
 #endif

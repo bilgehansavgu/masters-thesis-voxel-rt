@@ -3,16 +3,21 @@
 #include "FramePipeline.h"
 #include "SceneSetup.h"
 
+#include "thesis/core/GpuTypes.h"
 #include "thesis/core/Statistics.h"
+#include "thesis/gpu/Buffer.h"
 #include "thesis/gpu/Context.h"
 #include "thesis/metrics/Sinks.h"
 #include "thesis/metrics/SystemInfo.h"
 #include "thesis/profiling/Profiling.h"
+#include "thesis/shared/Hit.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <format>
 #include <optional>
 #include <thread>
@@ -57,6 +62,76 @@ double stageTime(const std::vector<gpu::StageTiming>& timings, std::string_view 
         }
     }
     return 0.0;
+}
+
+// The work of the rays of one tracer, added up over kWorkViews views of the benchmark orbit:
+// how many primitives, cells and runs a ray was tested against. It runs the counting variant
+// of the tracer's shader. That variant is slower, so this happens after the timed repeats and
+// takes no part in them.
+nlohmann::json measureRayWork(const gpu::Context& context, FramePipeline& pipeline, tracing::ITracer& tracer,
+                              const core::OrbitCamera& baseCamera)
+{
+    constexpr std::uint32_t kWorkViews = 8;
+    const std::size_t count = pipeline.batch().count();
+    std::vector<core::RayWork> work(count);
+    std::vector<core::Hit> hits(count);
+
+    std::uint64_t rays = 0;
+    std::uint64_t raysWithHit = 0;
+    core::RayWork most{};
+    // Sums over all rays [0] and over the rays with a hit [1].
+    std::array<std::uint64_t, 2> primitiveTests{};
+    std::array<std::uint64_t, 2> cells{};
+    std::array<std::uint64_t, 2> runs{};
+    std::array<std::uint64_t, 4> hitCells{};
+    for (std::uint32_t view = 0; view < kWorkViews; ++view) {
+        const core::CameraFrame camera = cameraAt(baseCamera, view, kWorkViews, pipeline.aspectRatio());
+        context.submitAndWait([&](VkCommandBuffer cmd) {
+            pipeline.begin(cmd);
+            pipeline.trace(cmd, tracer, camera, true);
+        });
+        (void)pipeline.collectTimings();
+        const std::vector<std::byte> workBytes = gpu::downloadBuffer(context, *pipeline.work());
+        const std::vector<std::byte> hitBytes = gpu::downloadBuffer(context, pipeline.batch().hits);
+        std::memcpy(work.data(), workBytes.data(), count * sizeof(core::RayWork));
+        std::memcpy(hits.data(), hitBytes.data(), count * sizeof(core::Hit));
+
+        for (std::size_t ray = 0; ray < count; ++ray) {
+            const bool hit = hits[ray].primitive != core::kNoHit;
+            for (std::size_t group = 0; group < (hit ? 2u : 1u); ++group) {
+                primitiveTests[group] += work[ray].primitiveTests;
+                cells[group] += work[ray].cells;
+                runs[group] += work[ray].runs;
+            }
+            most.primitiveTests = std::max(most.primitiveTests, work[ray].primitiveTests);
+            most.cells = std::max(most.cells, work[ray].cells);
+            most.runs = std::max(most.runs, work[ray].runs);
+            raysWithHit += hit ? 1 : 0;
+            ++hitCells[std::min<std::uint32_t>(work[ray].hitCell, THESIS_HIT_CELL_SEVERAL_RUNS)];
+        }
+        rays += count;
+    }
+
+    const auto mean = [&](const std::array<std::uint64_t, 2>& sums, std::size_t group) {
+        const std::uint64_t count = group == 0 ? rays : raysWithHit;
+        return count == 0 ? 0.0 : static_cast<double>(sums[group]) / static_cast<double>(count);
+    };
+    const auto means = [&](std::size_t group) {
+        return nlohmann::json{{"primitive_tests", mean(primitiveTests, group)},
+                              {"cells", mean(cells, group)},
+                              {"runs", mean(runs, group)}};
+    };
+    return {{"note", "from the counting variant of the shader, not timed"},
+            {"views", kWorkViews},
+            {"rays", rays},
+            {"rays_with_hit", raysWithHit},
+            {"mean_per_ray", means(0)},
+            {"mean_per_ray_with_hit", means(1)},
+            {"max_per_ray", {{"primitive_tests", most.primitiveTests}, {"cells", most.cells}, {"runs", most.runs}}},
+            {"hits_by_cell_kind",
+             {{"height", hitCells[THESIS_HIT_CELL_HEIGHT]},
+              {"one_run", hitCells[THESIS_HIT_CELL_ONE_RUN]},
+              {"several_runs", hitCells[THESIS_HIT_CELL_SEVERAL_RUNS]}}}};
 }
 
 struct WarmupResult {
@@ -129,7 +204,7 @@ int runBenchmark(const Options& options)
     const tracing::TracerEnvironment environment{context, options.shaderDirectory};
 
     FramePipeline pipeline(context, options.shaderDirectory, {options.width, options.height});
-    const core::OrbitCamera baseCamera = core::OrbitCamera::framing(scene.bounds);
+    const core::OrbitCamera baseCamera = startCamera(options, scene.bounds);
     const std::uint64_t rayCount = pipeline.batch().count();
     const std::string stamp = fileTimestamp();
 
@@ -141,8 +216,10 @@ int runBenchmark(const Options& options)
                     static_cast<double>(built.memory.totalBytes) / (1024.0 * 1024.0),
                     built.memory.bitsPerVoxel(built.voxels), built.details.c_str());
     }
-    std::printf("Protocol: warm-up %.0f-%.0f s until the GPU clock settles, then %u repeats x %u frames\n\n",
+    std::printf("Protocol: warm-up %.0f-%.0f s until the GPU clock settles, then %u repeats x %u frames\n",
                 options.warmupSeconds, options.warmupMaxSeconds, options.repeats, options.frames);
+    std::printf("Camera: orbit from yaw %.0f, pitch %.0f, at %.2f x the distance that shows the whole scene\n\n",
+                options.camera.at(0), options.camera.at(1), options.camera.at(2));
     std::printf("%-10s %10s %10s %10s %10s %10s %8s\n", "tracer", "median ms", "min ms", "max ms", "Mrays/s",
                 "clock MHz", "settled");
 
@@ -190,8 +267,13 @@ int runBenchmark(const Options& options)
                          {"frames_per_repeat", options.frames},
                          {"repeats", options.repeats},
                          {"camera_path", "orbit, 360 degrees per repeat"},
+                         {"camera_start",
+                          {{"yaw_degrees", options.camera.at(0)},
+                           {"pitch_degrees", options.camera.at(1)},
+                           {"distance_factor", options.camera.at(2)}}},
                          {"validation", options.validation}};
         run["prepare"] = {{"gpu_ms", prepared.gpuMilliseconds},
+                          {"cpu_ms", prepared.cpuMilliseconds},
                           {"memory_bytes", prepared.memoryBytes},
                           {"scratch_bytes", prepared.scratchBytes}};
         run["memory_bytes"] = {{"scene", gpuScene.memoryBytes()},
@@ -265,11 +347,22 @@ int runBenchmark(const Options& options)
         summary["mrays_per_second"] = megaRaysPerSecond;
         summary["graphics_clock_mhz_after_each_repeat"] = repeatClocks;
         summary["system_after"] = metrics::captureSystemState();
+        if (tracer->countsWork()) {
+            summary["ray_work"] = measureRayWork(context, pipeline, *tracer, baseCamera);
+        }
         sinks.endRun(summary);
 
         const std::string clockText = warmup.clockMhz ? std::to_string(*warmup.clockMhz) : "n/a";
         std::printf("%-10s %10.3f %10.3f %10.3f %10.1f %10s %8s\n", tracerName.c_str(), medianMs, frames.min,
                     frames.max, megaRaysPerSecond, clockText.c_str(), warmup.clockStable ? "yes" : "NO");
+        if (summary.contains("ray_work")) {
+            const nlohmann::json& work = summary["ray_work"];
+            const nlohmann::json& mean = work["mean_per_ray_with_hit"];
+            std::printf(
+                "           %.1f %% of the rays hit; a ray that hits: %.2f primitive tests, %.2f cells, %.2f runs\n",
+                100.0 * work["rays_with_hit"].get<double>() / work["rays"].get<double>(),
+                mean["primitive_tests"].get<double>(), mean["cells"].get<double>(), mean["runs"].get<double>());
+        }
         std::printf("           -> %s\n", fileSink.path().string().c_str());
 
         if (tracer->findsHits()) {

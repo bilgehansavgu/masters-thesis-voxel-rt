@@ -67,6 +67,15 @@ BuiltScene SceneSource::build(std::size_t encoding) const
     return built;
 }
 
+core::OrbitCamera startCamera(const Options& options, const core::Bounds& bounds)
+{
+    core::OrbitCamera camera = core::OrbitCamera::framing(bounds);
+    camera.yawDegrees = options.camera.at(0);
+    camera.pitchDegrees = options.camera.at(1);
+    camera.distance *= options.camera.at(2);
+    return camera;
+}
+
 tracing::TracerRegistry makeTracerRegistry()
 {
     tracing::TracerRegistry registry;

@@ -5,8 +5,9 @@
 //
 // Both store the same columns and runs (see ColumnBrick.h); only the place of the normals
 // differs. Every bit is defined in shared/include/thesis/shared/Brick2012.h, which the brick
-// shaders read as well.
+// shaders read as well (shaders/common/brick2012.slang and shaders/primitives/brick2012_*).
 
+#include "thesis/brick2012/BrickBuffers.h"
 #include "thesis/brick2012/ColumnBrick.h"
 #include "thesis/encoding/Encoding.h"
 #include "thesis/shared/Bindings.h"
@@ -29,29 +30,6 @@ enum class Layout : std::uint32_t {
     Inline = THESIS_BRICK_LAYOUT_INLINE,
     Split = THESIS_BRICK_LAYOUT_SPLIT,
 };
-
-// Buffer "header": facts about the whole model. std430 layout: 3 x 16 bytes.
-struct BrickModelHeader {
-    glm::vec3 origin;
-    float voxelSize;
-    glm::uvec3 gridSize;
-    std::uint32_t brickSize;
-    std::uint32_t brickCount;
-    std::uint32_t layout;
-    std::uint32_t reserved0;
-    std::uint32_t reserved1;
-};
-static_assert(sizeof(BrickModelHeader) == 48);
-
-// Buffer "brick table": one record per brick, at the index of its primitive. A tracer reaches
-// the data of a brick only through this record, which later lets bricks be loaded on demand.
-struct BrickRecord {
-    std::uint32_t position;        // brick coordinate and primary axis, see THESIS_BRICK_*
-    std::uint32_t cellBase;        // index of the brick's first cell in the cell buffer
-    std::uint32_t indirectionBase; // index of the brick's first word in the indirection buffer
-    std::uint32_t attributeBase;   // split layout: index of the brick's first normal
-};
-static_assert(sizeof(BrickRecord) == 16);
 
 constexpr std::uint32_t kMaxBricksPerAxis = 1u << THESIS_BRICK_COORDINATE_BITS;
 
@@ -266,6 +244,9 @@ public:
         core::Scene& scene = result.scene;
         scene.name = model.name;
         scene.primitiveKind = std::string(name());
+        // Every brick lies inside one cell of the brick grid.
+        scene.primitiveGrid =
+            core::RegularGrid{model.grid.origin, model.grid.voxelSize * static_cast<float>(n), bricksPerAxis};
         scene.primitiveBounds.reserve(encoded.size());
         for (std::size_t i = 0; i < encoded.size(); ++i) {
             const EncodedBrick& brick = encoded[i];

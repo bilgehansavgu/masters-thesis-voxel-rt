@@ -28,12 +28,13 @@ std::vector<GridVoxel> listVoxels(const voxel::VoxelModel& model)
 }
 
 voxel::VoxelModel makeModel(std::uint32_t brickSize, const glm::uvec3& bricksPerAxis,
-                            const std::function<std::optional<std::uint16_t>(const glm::uvec3&)>& normalAt)
+                            const std::function<std::optional<std::uint16_t>(const glm::uvec3&)>& normalAt,
+                            const glm::vec3& origin, float voxelSize)
 {
     voxel::VoxelModel model;
     model.name = "test model";
-    model.grid.origin = {-1.0f, 2.0f, 0.5f};
-    model.grid.voxelSize = 0.25f;
+    model.grid.origin = origin;
+    model.grid.voxelSize = voxelSize;
     model.grid.brickSize = brickSize;
     model.grid.size = bricksPerAxis * brickSize;
 

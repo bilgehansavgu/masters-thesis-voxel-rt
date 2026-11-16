@@ -5,10 +5,12 @@
 namespace thesis::resolve {
 namespace {
 
-constexpr std::uint32_t kGroupSize = 8; // matches [numthreads(8, 8, 1)] in shade.slang
+constexpr std::uint32_t kGroupSize = 8; // matches [numthreads(8, 8, 1)] in shade.slang and shade_work.slang
 constexpr std::uint32_t kHitBinding = THESIS_BINDING_SHADE_HITS;
 constexpr std::uint32_t kOutputBinding = THESIS_BINDING_SHADE_OUTPUT;
+constexpr std::uint32_t kWorkBinding = THESIS_BINDING_SHADE_WORK;
 
+// Mirrors ShadeParams in shade.slang.
 struct ShadeParams {
     std::uint32_t width;
     std::uint32_t height;
@@ -20,25 +22,54 @@ struct ShadeParams {
     float pad2;
 };
 
+// Mirrors ShadeWorkParams in shade_work.slang.
+struct ShadeWorkParams {
+    std::uint32_t width;
+    std::uint32_t height;
+    std::uint32_t mode; // 0 cells, 1 primitives, 2 runs, 3 kind of the cell at the hit
+    std::uint32_t pad0;
+    float scale;
+    float pad1;
+    float pad2;
+    float pad3;
+};
+
 } // namespace
 
 HitShading::HitShading(const gpu::Context& context, const std::filesystem::path& shaderDirectory)
     : kernel_(context, gpu::KernelDescription{shaderDirectory / "shade.spv",
                                               {{kHitBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
                                                {kOutputBinding, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}},
-                                              sizeof(ShadeParams)})
+                                              sizeof(ShadeParams)}),
+      workKernel_(context, gpu::KernelDescription{shaderDirectory / "shade_work.spv",
+                                                  {{kHitBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                                                   {kOutputBinding, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+                                                   {kWorkBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}},
+                                                  sizeof(ShadeWorkParams)})
 {}
 
 void HitShading::shade(VkCommandBuffer cmd, const tracing::RayBatch& batch, VkImageView output,
-                       const ShadingParams& params) const
+                       const ShadingParams& params, const gpu::Buffer* work) const
 {
-    const ShadeParams push{
-        batch.width, batch.height, static_cast<std::uint32_t>(params.mode), 0, params.distanceNear, params.distanceFar,
-        0.0f,        0.0f};
+    const std::uint32_t groupsX = gpu::groupCount(batch.width, kGroupSize);
+    const std::uint32_t groupsY = gpu::groupCount(batch.height, kGroupSize);
     gpu::KernelResources resources;
     resources.buffer(kHitBinding, batch.hits).storageImage(kOutputBinding, output);
-    kernel_.dispatch(cmd, resources, gpu::groupCount(batch.width, kGroupSize),
-                     gpu::groupCount(batch.height, kGroupSize), 1, push);
+
+    if (showsWork(params.mode) && work != nullptr) {
+        const std::uint32_t workMode =
+            static_cast<std::uint32_t>(params.mode) - static_cast<std::uint32_t>(ShadingMode::WorkCells);
+        const ShadeWorkParams push{batch.width, batch.height, workMode, 0, params.workScale, 0.0f, 0.0f, 0.0f};
+        resources.buffer(kWorkBinding, *work);
+        workKernel_.dispatch(cmd, resources, groupsX, groupsY, 1, push);
+        return;
+    }
+
+    const ShadingMode mode = showsWork(params.mode) ? ShadingMode::Shaded : params.mode;
+    const ShadeParams push{
+        batch.width, batch.height, static_cast<std::uint32_t>(mode), 0, params.distanceNear, params.distanceFar,
+        0.0f,        0.0f};
+    kernel_.dispatch(cmd, resources, groupsX, groupsY, 1, push);
 }
 
 } // namespace thesis::resolve

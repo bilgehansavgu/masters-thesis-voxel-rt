@@ -26,6 +26,7 @@ struct TracerEnvironment {
 // What building a tracer's search structure cost.
 struct PrepareReport {
     double gpuMilliseconds = 0.0;   // GPU time of the build
+    double cpuMilliseconds = 0.0;   // CPU time of the build, for the part that runs on the CPU
     std::uint64_t memoryBytes = 0;  // memory the tracer keeps for this scene
     std::uint64_t scratchBytes = 0; // temporary memory the build needed
 };
@@ -63,6 +64,16 @@ public:
     // False for measurement baselines that pass rays through without searching (the null
     // tracer). They are benchmarked like any tracer but skipped by correctness checks.
     [[nodiscard]] virtual bool findsHits() const { return true; }
+
+    // DIAGNOSIS, never timed. traceCounting() does the same search as trace() and writes the same
+    // hits. In addition it writes the work of every ray to `work` (core::RayWork[batch.count()]).
+    // It runs the counting variant of the tracer's shader, which is slower. Call it only when
+    // countsWork() returns true.
+    [[nodiscard]] virtual bool countsWork() const { return false; }
+    virtual void traceCounting(VkCommandBuffer /*cmd*/, const RayBatch& /*batch*/, const gpu::Buffer& /*work*/)
+    {
+        throw std::logic_error("This tracer does not count work");
+    }
 };
 
 using TracerRegistry = core::Registry<ITracer, const TracerEnvironment&>;

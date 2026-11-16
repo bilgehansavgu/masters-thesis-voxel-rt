@@ -2,6 +2,7 @@
 
 #include "Options.h"
 
+#include "thesis/core/Camera.h"
 #include "thesis/core/Scene.h"
 #include "thesis/encoding/Encoding.h"
 #include "thesis/tracing/Tracer.h"
@@ -50,6 +51,9 @@ private:
     std::vector<std::string> encodings_;
     std::size_t initialEncoding_ = 0;
 };
+
+// The camera at the start: the one that shows all of `bounds`, changed by --camera.
+[[nodiscard]] core::OrbitCamera startCamera(const Options& options, const core::Bounds& bounds);
 
 // All tracers built into the program, in registration order.
 [[nodiscard]] tracing::TracerRegistry makeTracerRegistry();

@@ -1,7 +1,8 @@
-// The data formats shared by C++ and the shaders (Ray, Hit, Aabb) are declared in both
-// languages. This test reads the shader compiler's own layout report for every compiled shader
-// and checks each shared struct against the C++ declaration, field by field. Needs no GPU.
+// The data formats shared by C++ and the shaders (Ray, Hit, RayWork, Aabb and the two structs of
+// the brick buffers) are declared in both languages. This test reads the shader compiler's own layout report for every
+// compiled shader and checks each shared struct against the C++ declaration, field by field. Needs no GPU.
 
+#include "thesis/brick2012/BrickBuffers.h"
 #include "thesis/core/GpuTypes.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -28,9 +29,12 @@ struct Field {
 // declared with two vec3 in C++ and six scalars in Slang (see types.slang), hence the mapping.
 std::map<std::string, std::vector<Field>> cppLayouts()
 {
+    using brick2012::BrickModelHeader;
+    using brick2012::BrickRecord;
     using core::Aabb;
     using core::Hit;
     using core::Ray;
+    using core::RayWork;
     return {
         {"Ray",
          {{"origin", offsetof(Ray, origin), 12},
@@ -41,7 +45,26 @@ std::map<std::string, std::vector<Field>> cppLayouts()
          {{"t", offsetof(Hit, t), 4},
           {"primitive", offsetof(Hit, primitive), 4},
           {"face", offsetof(Hit, face), 4},
-          {"reserved", offsetof(Hit, reserved), 4}}},
+          {"attributes", offsetof(Hit, attributes), 4}}},
+        {"RayWork",
+         {{"primitiveTests", offsetof(RayWork, primitiveTests), 4},
+          {"cells", offsetof(RayWork, cells), 4},
+          {"runs", offsetof(RayWork, runs), 4},
+          {"hitCell", offsetof(RayWork, hitCell), 4}}},
+        {"BrickModelHeader",
+         {{"origin", offsetof(BrickModelHeader, origin), 12},
+          {"voxelSize", offsetof(BrickModelHeader, voxelSize), 4},
+          {"gridSize", offsetof(BrickModelHeader, gridSize), 12},
+          {"brickSize", offsetof(BrickModelHeader, brickSize), 4},
+          {"brickCount", offsetof(BrickModelHeader, brickCount), 4},
+          {"layout", offsetof(BrickModelHeader, layout), 4},
+          {"reserved0", offsetof(BrickModelHeader, reserved0), 4},
+          {"reserved1", offsetof(BrickModelHeader, reserved1), 4}}},
+        {"BrickRecord",
+         {{"position", offsetof(BrickRecord, position), 4},
+          {"cellBase", offsetof(BrickRecord, cellBase), 4},
+          {"indirectionBase", offsetof(BrickRecord, indirectionBase), 4},
+          {"attributeBase", offsetof(BrickRecord, attributeBase), 4}}},
         {"Aabb",
          {{"minX", offsetof(Aabb, lo) + 0, 4},
           {"minY", offsetof(Aabb, lo) + 4, 4},

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <iterator>
 #include <string_view>
 #include <utility>
 
@@ -72,7 +73,9 @@ void ControlPanel::handleInput()
         if (ImGui::IsKeyPressed(ImGuiKey_E)) {
             selectNextEncoding();
         }
-        const ImGuiKey modeKeys[] = {ImGuiKey_1, ImGuiKey_2, ImGuiKey_3, ImGuiKey_4};
+        const ImGuiKey modeKeys[] = {ImGuiKey_1, ImGuiKey_2, ImGuiKey_3, ImGuiKey_4, ImGuiKey_5,
+                                     ImGuiKey_6, ImGuiKey_7, ImGuiKey_8, ImGuiKey_9};
+        static_assert(std::size(modeKeys) == resolve::kShadingModeNames.size());
         for (std::size_t mode = 0; mode < std::size(modeKeys); ++mode) {
             if (ImGui::IsKeyPressed(modeKeys[mode])) {
                 shading_.mode = static_cast<resolve::ShadingMode>(mode);
@@ -128,12 +131,23 @@ void ControlPanel::draw()
         }
     }
     int mode = static_cast<int>(shading_.mode);
-    if (ImGui::Combo("View (1-4)", &mode, resolve::kShadingModeNames.data(),
+    if (ImGui::Combo("View (1-9)", &mode, resolve::kShadingModeNames.data(),
                      static_cast<int>(resolve::kShadingModeNames.size()))) {
         shading_.mode = static_cast<resolve::ShadingMode>(mode);
     }
     if (shading_.mode == resolve::ShadingMode::Distance) {
         ImGui::DragFloatRange2("Distance range", &shading_.distanceNear, &shading_.distanceFar, 0.1f, 0.0f, 1000.0f);
+    }
+    const bool workView = resolve::showsWork(shading_.mode);
+    if (workView && shading_.mode != resolve::ShadingMode::WorkHitCell) {
+        ImGui::DragFloat("Count at red", &shading_.workScale, 1.0f, 1.0f, 4096.0f, "%.0f");
+        ImGui::TextDisabled("black 0, blue, green, yellow, red, white above");
+    }
+    if (shading_.mode == resolve::ShadingMode::WorkHitCell) {
+        ImGui::TextDisabled("green: one voxel, blue: one run, red: several runs");
+    }
+    if (workView && !tracer.countsWork) {
+        ImGui::TextDisabled("This tracer does not count work.");
     }
 
     ImGui::SeparatorText("GPU time per frame");
@@ -142,7 +156,11 @@ void ControlPanel::draw()
     ImGui::Text("ray generation %8.3f ms", rayGenerationMs_.value);
     ImGui::Text("trace          %8.3f ms  (%.0f Mrays/s)", traceMs_.value, megaRays);
     ImGui::Text("shading        %8.3f ms", shadingMs_.value);
-    ImGui::TextDisabled("Live numbers. Use --benchmark for thesis numbers.");
+    if (workView && tracer.countsWork) {
+        ImGui::TextDisabled("A work view runs the counting shader: slower than the tracer.");
+    } else {
+        ImGui::TextDisabled("Live numbers. Use --benchmark for thesis numbers.");
+    }
 
     ImGui::SeparatorText("Scene");
     ImGui::Text("%s", facts_.sceneName.c_str());
@@ -170,7 +188,7 @@ void ControlPanel::draw()
     ImGui::SeparatorText("Tracer memory");
     ImGui::Text("%-16s %s", "search structure", formatBytes(tracer.memoryBytes).c_str());
     ImGui::Text("%-16s %s", "rays + hits", formatBytes(facts_.rayAndHitBytes).c_str());
-    ImGui::Text("%-16s %.3f ms", "build time", tracer.buildMilliseconds);
+    ImGui::Text("%-16s %.3f ms (%s)", "build time", tracer.buildMilliseconds, tracer.buildOnCpu ? "CPU" : "GPU");
 
     ImGui::SeparatorText("Camera");
     ImGui::TextDisabled("Drag to orbit, scroll to zoom");

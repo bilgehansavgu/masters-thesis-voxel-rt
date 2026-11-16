@@ -1,8 +1,11 @@
 #include "thesis/gpu/Image.h"
 
 #include "thesis/gpu/Barriers.h"
+#include "thesis/gpu/Buffer.h"
 #include "thesis/gpu/Check.h"
 #include "thesis/gpu/Context.h"
+
+#include <stdexcept>
 
 namespace thesis::gpu {
 
@@ -49,6 +52,37 @@ void StorageImage::transition(VkCommandBuffer cmd, VkImageLayout newLayout, VkPi
     layout_ = newLayout;
     lastStage_ = nextStage;
     lastAccess_ = nextAccess;
+}
+
+std::vector<std::byte> downloadImage(const Context& context, StorageImage& image)
+{
+    if (image.format() != VK_FORMAT_R8G8B8A8_UNORM) {
+        throw std::invalid_argument("downloadImage: only RGBA8 images are supported");
+    }
+    const VkExtent2D extent = image.extent();
+    const VkDeviceSize bytes = static_cast<VkDeviceSize>(extent.width) * extent.height * 4;
+    Buffer staging(context, bytes, 0, MemoryUsage::Readback);
+    context.submitAndWait([&](VkCommandBuffer cmd) {
+        image.transition(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_COPY_BIT,
+                         VK_ACCESS_2_TRANSFER_READ_BIT);
+        VkBufferImageCopy region{};
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageExtent = {extent.width, extent.height, 1};
+        vkCmdCopyImageToBuffer(cmd, image.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, staging.handle(), 1, &region);
+
+        VkMemoryBarrier2 after{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        after.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+        after.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        after.dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
+        after.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
+        VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dependency.memoryBarrierCount = 1;
+        dependency.pMemoryBarriers = &after;
+        vkCmdPipelineBarrier2(cmd, &dependency);
+    });
+    staging.invalidate();
+    const auto* first = static_cast<const std::byte*>(staging.mapped());
+    return std::vector<std::byte>(first, first + bytes);
 }
 
 } // namespace thesis::gpu

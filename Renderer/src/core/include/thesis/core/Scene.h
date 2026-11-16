@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -32,18 +33,29 @@ struct PrimitiveData {
     std::vector<std::byte> bytes;
 };
 
+// A regular grid of equal cubes: cell (x, y, z) is the cube from origin + cellSize * (x, y, z)
+// to origin + cellSize * (x + 1, y + 1, z + 1).
+struct RegularGrid {
+    glm::vec3 origin{0.0f};
+    float cellSize = 1.0f;
+    glm::uvec3 size{0}; // cells along each axis
+};
+
 // A scene as the tracers see it: a list of primitives, each with a bounding box.
 //
 // `primitiveKind` names the shader module that knows what is inside a primitive's box
-// (shaders/primitives/<kind>/). In step 0 the kind is "box": the primitive is its box and
-// needs no extra data. Later the kind is an encoded voxel brick: the bounds are the bricks'
-// bounds and `primitiveData` holds the encoded bricks.
+// (shaders/primitives/<kind>/). For the kind "box" the primitive is its box and needs no extra
+// data. For an encoded voxel model the kind is the encoding: the bounds are the boxes of the
+// bricks and `primitiveData` holds the encoded bricks.
 struct Scene {
     std::string name;
     std::string primitiveKind;
     std::vector<Aabb> primitiveBounds;
     std::vector<PrimitiveData> primitiveData;
     Bounds bounds;
+    // A hint for tracers that build their own search structure. Set when every primitive lies
+    // inside one cell of this grid, as the bricks of a voxel model do. No tracer has to use it.
+    std::optional<RegularGrid> primitiveGrid;
 };
 
 } // namespace thesis::core

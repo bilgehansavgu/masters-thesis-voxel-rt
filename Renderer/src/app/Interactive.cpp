@@ -90,7 +90,8 @@ int runInteractive(const Options& options)
             auto tracer = registry.create(name, environment);
             try {
                 const tracing::PrepareReport report = tracer->prepare(active->gpuScene);
-                facts.tracers.push_back({name, tracer->memoryBytes(), report.gpuMilliseconds});
+                facts.tracers.push_back({name, tracer->memoryBytes(), report.gpuMilliseconds + report.cpuMilliseconds,
+                                         report.cpuMilliseconds > 0.0, tracer->countsWork()});
                 active->tracers.push_back(std::move(tracer));
             } catch (const tracing::UnsupportedScene& reason) {
                 facts.skippedTracers.push_back(name + ": " + reason.what());
@@ -111,12 +112,8 @@ int runInteractive(const Options& options)
 
     Presenter presenter(context, window);
     Gui gui(context, window, presenter.format(), presenter.imageCount());
-    // A voxel model has far too many bricks for the software tracer of step 1 to be pleasant,
-    // so the window starts with the hardware tracer there.
-    const std::size_t initialTracer =
-        findTracer(facts.tracers, options.tracers, source.isVoxelModel() ? "hardware" : "software");
-    ControlPanel panel(std::move(facts), core::OrbitCamera::framing(active->gpuScene.bounds), initialTracer,
-                       loadedEncoding);
+    const std::size_t initialTracer = findTracer(facts.tracers, options.tracers, "hardware");
+    ControlPanel panel(std::move(facts), startCamera(options, active->gpuScene.bounds), initialTracer, loadedEncoding);
     metrics::TracySink tracySink;
     std::uint64_t frameIndex = 0;
 
@@ -155,7 +152,8 @@ int runInteractive(const Options& options)
         panel.draw();
 
         pipeline.begin(*cmd);
-        pipeline.trace(*cmd, *active->tracers[panel.activeTracer()], panel.camera().frame(pipeline.aspectRatio()));
+        pipeline.trace(*cmd, *active->tracers[panel.activeTracer()], panel.camera().frame(pipeline.aspectRatio()),
+                       resolve::showsWork(panel.shading().mode));
         pipeline.shade(*cmd, panel.shading());
         const bool rebuilt =
             presenter.present(pipeline.output(), [&](VkCommandBuffer overlayCmd, VkImageView view, VkExtent2D extent) {

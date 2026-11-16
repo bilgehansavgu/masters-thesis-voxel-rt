@@ -17,6 +17,8 @@ struct PanelFacts {
         std::string name;
         std::uint64_t memoryBytes = 0;
         double buildMilliseconds = 0.0;
+        bool buildOnCpu = false;
+        bool countsWork = false;
     };
     struct SceneBuffer {
         std::string name;
@@ -38,7 +40,7 @@ struct PanelFacts {
 };
 
 // What the user controls in the window, and the panel that shows it:
-// mouse orbits and zooms the camera, Tab switches tracer, E switches encoding, 1-4 switch the view.
+// mouse orbits and zooms the camera, Tab switches tracer, E switches encoding, 1-9 switch the view.
 // Uses ImGui, so call handleInput() and draw() between Gui::newFrame() and Gui::render().
 class ControlPanel {
 public:

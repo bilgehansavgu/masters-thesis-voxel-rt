@@ -17,6 +17,7 @@
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -95,15 +96,8 @@ public:
         bottomLevel_ = std::move(bottom.structure);
         topLevel_ = std::move(top.structure);
 
-        std::vector<gpu::KernelBinding> bindings{{tracing::kRayBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-                                                 {tracing::kHitBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-                                                 {kSceneBinding, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR}};
-        for (const gpu::KernelBinding& binding : scene.primitiveBindings()) {
-            bindings.push_back(binding);
-        }
-        kernel_.emplace(context, gpu::KernelDescription{environment_.shaderDirectory /
-                                                            ("trace_hardware." + scene.primitiveKind + ".spv"),
-                                                        std::move(bindings), sizeof(TraceParams)});
+        countingKernel_.reset();
+        createKernel(kernel_, false);
 
         tracing::PrepareReport report;
         report.gpuMilliseconds = bottom.gpuMilliseconds + top.gpuMilliseconds;
@@ -117,23 +111,62 @@ public:
         if (!kernel_ || scene_ == nullptr) {
             throw std::logic_error("HardwareTracer: prepare() must be called before trace()");
         }
-        gpu::KernelResources resources;
-        resources.buffer(tracing::kRayBinding, batch.rays)
-            .buffer(tracing::kHitBinding, batch.hits)
-            .accelerationStructure(kSceneBinding, topLevel_.handle());
-        scene_->bindPrimitiveData(resources);
-        const TraceParams params{batch.count(), 0, 0, 0};
-        kernel_->dispatch(cmd, resources, gpu::groupCount(batch.count(), kGroupSize), 1, 1, params);
+        dispatch(cmd, *kernel_, batch, nullptr);
+    }
+
+    bool countsWork() const override { return true; }
+
+    void traceCounting(VkCommandBuffer cmd, const tracing::RayBatch& batch, const gpu::Buffer& work) override
+    {
+        if (scene_ == nullptr) {
+            throw std::logic_error("HardwareTracer: prepare() must be called before traceCounting()");
+        }
+        if (!countingKernel_) {
+            createKernel(countingKernel_, true);
+        }
+        dispatch(cmd, *countingKernel_, batch, &work);
     }
 
     std::uint64_t memoryBytes() const override { return bottomLevel_.size() + topLevel_.size(); }
 
 private:
+    void createKernel(std::optional<gpu::ComputeKernel>& kernel, bool counting) const
+    {
+        std::vector<gpu::KernelBinding> bindings{{tracing::kRayBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                                                 {tracing::kHitBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                                                 {kSceneBinding, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR}};
+        if (counting) {
+            bindings.push_back({tracing::kRayWorkBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER});
+        }
+        for (const gpu::KernelBinding& binding : scene_->primitiveBindings()) {
+            bindings.push_back(binding);
+        }
+        const std::string file = "trace_hardware." + scene_->primitiveKind + (counting ? ".counting.spv" : ".spv");
+        kernel.emplace(environment_.gpu, gpu::KernelDescription{environment_.shaderDirectory / file,
+                                                                std::move(bindings), sizeof(TraceParams)});
+    }
+
+    void dispatch(VkCommandBuffer cmd, const gpu::ComputeKernel& kernel, const tracing::RayBatch& batch,
+                  const gpu::Buffer* work) const
+    {
+        gpu::KernelResources resources;
+        resources.buffer(tracing::kRayBinding, batch.rays)
+            .buffer(tracing::kHitBinding, batch.hits)
+            .accelerationStructure(kSceneBinding, topLevel_.handle());
+        if (work != nullptr) {
+            resources.buffer(tracing::kRayWorkBinding, *work);
+        }
+        scene_->bindPrimitiveData(resources);
+        const TraceParams params{batch.count(), 0, 0, 0};
+        kernel.dispatch(cmd, resources, gpu::groupCount(batch.count(), kGroupSize), 1, 1, params);
+    }
+
     tracing::TracerEnvironment environment_;
     const tracing::GpuScene* scene_ = nullptr;
     gpu::AccelerationStructure bottomLevel_;
     gpu::AccelerationStructure topLevel_;
     std::optional<gpu::ComputeKernel> kernel_;
+    std::optional<gpu::ComputeKernel> countingKernel_; // created when it is first needed
 };
 
 } // namespace

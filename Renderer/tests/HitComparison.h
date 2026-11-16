@@ -15,7 +15,8 @@ namespace thesis::tests {
 // Rounding can make a ray that grazes an edge hit in one tracer and miss in the other; that is
 // why the agreement test allows a tiny fraction of disagreeing rays instead of demanding zero.
 // A different primitive at the same distance (two surfaces touching) is counted separately:
-// both answers are correct.
+// both answers are correct. The same holds for different attributes on the same primitive: two
+// voxels of one brick that share an edge.
 struct HitComparison {
     std::size_t rays = 0;
     std::size_t bothMiss = 0;
@@ -24,6 +25,7 @@ struct HitComparison {
     std::size_t distanceMismatch = 0;  // both hit, distances differ beyond tolerance
     std::size_t faceMismatch = 0;      // same primitive at the same distance, different side
     std::size_t primitiveMismatch = 0; // both hit at the same distance, different primitive
+    std::size_t attributeMismatch = 0; // same primitive, distance and side, different attributes
     float maxRelativeDistanceError = 0.0f;
 
     [[nodiscard]] std::size_t disagreements() const { return hitVersusMiss + distanceMismatch + faceMismatch; }

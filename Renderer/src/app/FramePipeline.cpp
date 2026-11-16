@@ -1,5 +1,6 @@
 #include "FramePipeline.h"
 
+#include "thesis/core/GpuTypes.h"
 #include "thesis/gpu/Barriers.h"
 #include "thesis/gpu/Context.h"
 
@@ -21,8 +22,14 @@ void FramePipeline::begin(VkCommandBuffer cmd)
     timer_.reset(cmd);
 }
 
-void FramePipeline::trace(VkCommandBuffer cmd, tracing::ITracer& tracer, const core::CameraFrame& camera)
+void FramePipeline::trace(VkCommandBuffer cmd, tracing::ITracer& tracer, const core::CameraFrame& camera,
+                          bool countWork)
 {
+    workCounted_ = countWork && tracer.countsWork();
+    if (workCounted_ && work_.handle() == VK_NULL_HANDLE) {
+        work_ = gpu::Buffer(context_, static_cast<VkDeviceSize>(batch_.count()) * sizeof(core::RayWork),
+                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, gpu::MemoryUsage::DeviceLocal);
+    }
     {
         THESIS_GPU_SCOPE(timer_, context_.tracy(), cmd, kStageRayGeneration);
         cameraRays_.generate(cmd, camera, batch_);
@@ -30,7 +37,11 @@ void FramePipeline::trace(VkCommandBuffer cmd, tracing::ITracer& tracer, const c
     gpu::computeToComputeBarrier(cmd);
     {
         THESIS_GPU_SCOPE(timer_, context_.tracy(), cmd, kStageTrace);
-        tracer.trace(cmd, batch_);
+        if (workCounted_) {
+            tracer.traceCounting(cmd, batch_, work_);
+        } else {
+            tracer.trace(cmd, batch_);
+        }
     }
     gpu::computeToComputeBarrier(cmd);
 }
@@ -40,7 +51,7 @@ void FramePipeline::shade(VkCommandBuffer cmd, const resolve::ShadingParams& par
     output_.transition(cmd, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
     THESIS_GPU_SCOPE(timer_, context_.tracy(), cmd, kStageShading);
-    shading_.shade(cmd, batch_, output_.view(), params);
+    shading_.shade(cmd, batch_, output_.view(), params, work());
 }
 
 std::vector<gpu::StageTiming> FramePipeline::collectTimings()

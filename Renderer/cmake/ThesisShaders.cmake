@@ -13,14 +13,17 @@ set(THESIS_SHADER_ROOT "${CMAKE_SOURCE_DIR}/shaders")
 set(THESIS_SHADER_OUTPUT_DIR "${CMAKE_BINARY_DIR}/shaders")
 option(THESIS_SHADER_DEBUG_INFO "Embed debug info in SPIR-V (for Nsight shader debugging)" OFF)
 
-# thesis_add_shaders(OWNER <target> SOURCES <file.slang>... [PER_PRIMITIVE] [CAPABILITIES <cap>...])
+# thesis_add_shaders(OWNER <target> SOURCES <file.slang>... [PER_PRIMITIVE] [COUNTING]
+#                    [CAPABILITIES <cap>...])
 #
 # Compiles each source (entry point `main`, compute stage). Output name is the source's base name,
 # or <base>.<kind> for every kind in THESIS_PRIMITIVE_KINDS when PER_PRIMITIVE is given.
+# COUNTING compiles each output a second time as <name>.counting, with THESIS_COUNT_WORK defined:
+# the variant that counts the work of each ray (shaders/common/work.slang). It is never timed.
 # CAPABILITIES are extra Slang capabilities the shaders need (e.g. spvRayQueryKHR).
 # A custom target <OWNER>_shaders is created in the calling directory and OWNER depends on it.
 function(thesis_add_shaders)
-    cmake_parse_arguments(ARG "PER_PRIMITIVE" "OWNER" "SOURCES;CAPABILITIES" ${ARGN})
+    cmake_parse_arguments(ARG "PER_PRIMITIVE;COUNTING" "OWNER" "SOURCES;CAPABILITIES" ${ARGN})
 
     file(GLOB_RECURSE shared_modules CONFIGURE_DEPENDS
         "${THESIS_SHADER_ROOT}/*.slang" "${THESIS_SHARED_INCLUDE_DIR}/*.h")
@@ -57,18 +60,31 @@ function(thesis_add_shaders)
                 set(stem "${THESIS_SHADER_OUTPUT_DIR}/${base}.${kind}")
                 set(kind_flags -I "${THESIS_SHADER_ROOT}/primitives/${kind}")
             endif()
-            # <stem>.json is Slang's own report of the shader's resources and memory layouts.
-            # ComputeKernel checks it against the C++ side when a kernel is created, and
-            # tests/TestShaderLayouts.cpp checks the shared structs field by field.
-            add_custom_command(
-                OUTPUT "${stem}.spv" "${stem}.json"
-                COMMAND "${CMAKE_COMMAND}" -E make_directory "${THESIS_SHADER_OUTPUT_DIR}"
-                COMMAND "${SLANGC_EXECUTABLE}" "${source_path}" ${flags} ${kind_flags}
-                        -o "${stem}.spv" -reflection-json "${stem}.json"
-                DEPENDS "${source_path}" ${shared_modules}
-                COMMENT "slangc ${base} ${kind}"
-                VERBATIM)
-            list(APPEND outputs "${stem}.spv" "${stem}.json")
+            set(variants "timed")
+            if(ARG_COUNTING)
+                list(APPEND variants "counting")
+            endif()
+            foreach(variant IN LISTS variants)
+                if(variant STREQUAL "counting")
+                    set(output "${stem}.counting")
+                    set(variant_flags -D THESIS_COUNT_WORK)
+                else()
+                    set(output "${stem}")
+                    set(variant_flags "")
+                endif()
+                # <output>.json is Slang's own report of the shader's resources and memory layouts.
+                # ComputeKernel checks it against the C++ side when a kernel is created, and
+                # tests/TestShaderLayouts.cpp checks the shared structs field by field.
+                add_custom_command(
+                    OUTPUT "${output}.spv" "${output}.json"
+                    COMMAND "${CMAKE_COMMAND}" -E make_directory "${THESIS_SHADER_OUTPUT_DIR}"
+                    COMMAND "${SLANGC_EXECUTABLE}" "${source_path}" ${flags} ${kind_flags} ${variant_flags}
+                            -o "${output}.spv" -reflection-json "${output}.json"
+                    DEPENDS "${source_path}" ${shared_modules}
+                    COMMENT "slangc ${base} ${kind} ${variant}"
+                    VERBATIM)
+                list(APPEND outputs "${output}.spv" "${output}.json")
+            endforeach()
         endforeach()
     endforeach()
 

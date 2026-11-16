@@ -1,13 +1,16 @@
 // Shading: hit list → image. Shared by every tracer.
 
 import types;
+import normals;
+import display;
 #include "thesis/shared/Bindings.h"
+#include "thesis/shared/Hit.h"
 
 struct ShadeParams
 {
     uint width;
     uint height;
-    uint mode;  // 0 shaded, 1 distance, 2 primitive id, 3 normal
+    uint mode;  // 0 shaded, 1 distance, 2 primitive id, 3 normal, 4 faces
     uint pad0;
     float distanceNear;
     float distanceFar;
@@ -29,11 +32,18 @@ float3 colorFromId(uint id)
     return float3(float(h & 0xFF), float((h >> 8) & 0xFF), float((h >> 16) & 0xFF)) / 255.0;
 }
 
+// The normal of the side of the box or voxel that the ray entered through.
 float3 faceNormal(uint face)
 {
     float3 normal = float3(0.0, 0.0, 0.0);
     normal[face / 2] = (face & 1) != 0 ? 1.0 : -1.0;
     return normal;
+}
+
+float3 lit(float3 base, float3 normal)
+{
+    float3 toLight = normalize(float3(0.4, 1.0, 0.3));
+    return base * (0.25 + 0.75 * max(dot(normal, toLight), 0.0));
 }
 
 [shader("compute")]
@@ -44,12 +54,16 @@ void main(uint3 threadId : SV_DispatchThreadID)
         return;
 
     Hit hit = gHits[threadId.y * gParams.width + threadId.x];
+    // The normal that the primitive kind stores for the hit point. A kind without one (the box)
+    // gets the normal of the face.
+    const bool hasStoredNormal = (hit.attributes & THESIS_HIT_HAS_NORMAL) != 0;
+    const float3 storedNormal =
+        hasStoredNormal ? decodeNormal(hit.attributes & THESIS_HIT_NORMAL_MASK) : faceNormal(hit.face);
     float3 color;
 
     if (hit.primitive == kNoHit)
     {
-        float v = float(threadId.y) / float(gParams.height);
-        color = lerp(float3(0.55, 0.70, 0.90), float3(0.22, 0.27, 0.36), v);
+        color = backgroundColor(float(threadId.y) / float(gParams.height));
     }
     else if (gParams.mode == 1)
     {
@@ -62,15 +76,18 @@ void main(uint3 threadId : SV_DispatchThreadID)
     }
     else if (gParams.mode == 3)
     {
-        color = faceNormal(hit.face) * 0.5 + 0.5;
+        color = storedNormal * 0.5 + 0.5;
+    }
+    else if (gParams.mode == 4)
+    {
+        color = lit(float3(0.8, 0.8, 0.8), faceNormal(hit.face));
     }
     else
     {
-        float3 base = 0.35 + 0.65 * colorFromId(hit.primitive);
-        float3 toLight = normalize(float3(0.4, 1.0, 0.3));
-        float diffuse = max(dot(faceNormal(hit.face), toLight), 0.0);
-        color = base * (0.25 + 0.75 * diffuse);
+        // A model with stored normals is one surface: one colour. Boxes get a colour each.
+        const float3 base = hasStoredNormal ? float3(0.8, 0.8, 0.8) : 0.35 + 0.65 * colorFromId(hit.primitive);
+        color = lit(base, storedNormal);
     }
 
-    gOutput[threadId.xy] = float4(pow(saturate(color), 1.0 / 2.2), 1.0);
+    gOutput[threadId.xy] = toDisplay(color);
 }

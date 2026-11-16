@@ -5,6 +5,7 @@
 #include "thesis/gpu/ComputeKernel.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -31,6 +32,7 @@ struct GpuScene {
     std::string primitiveKind;
     std::uint32_t primitiveCount = 0;
     core::Bounds bounds;
+    std::optional<core::RegularGrid> primitiveGrid; // see core::Scene
     // core::Aabb[primitiveCount]. Every kind gets it at kPrimitiveBoundsBinding; it is also the
     // input for GPU-built search structures.
     gpu::Buffer primitiveBounds;

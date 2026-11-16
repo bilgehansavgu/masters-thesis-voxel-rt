@@ -30,7 +30,10 @@ public:
     // Start of a frame's command buffer: resets the timers, flushes Tracy GPU zones.
     void begin(VkCommandBuffer cmd);
     // Ray generation and tracing, with barriers around the tracer.
-    void trace(VkCommandBuffer cmd, tracing::ITracer& tracer, const core::CameraFrame& camera);
+    // With `countWork` the tracer runs its counting variant, and work() holds the work of each
+    // ray afterwards. That is for diagnosis: the trace time of such a frame is not a result.
+    // A tracer that cannot count work is traced as usual.
+    void trace(VkCommandBuffer cmd, tracing::ITracer& tracer, const core::CameraFrame& camera, bool countWork = false);
     // Shading into output() (left in GENERAL layout, ready to be copied by the caller).
     void shade(VkCommandBuffer cmd, const resolve::ShadingParams& params);
 
@@ -38,12 +41,16 @@ public:
     [[nodiscard]] std::vector<gpu::StageTiming> collectTimings();
 
     [[nodiscard]] const tracing::RayBatch& batch() const { return batch_; }
+    // core::RayWork for each ray of the last frame, or null if that frame did not count work.
+    [[nodiscard]] const gpu::Buffer* work() const { return workCounted_ ? &work_ : nullptr; }
     [[nodiscard]] gpu::StorageImage& output() { return output_; }
     [[nodiscard]] float aspectRatio() const;
 
 private:
     const gpu::Context& context_;
     tracing::RayBatch batch_;
+    gpu::Buffer work_; // created when work is counted for the first time
+    bool workCounted_ = false;
     gpu::StorageImage output_;
     workloads::CameraRays cameraRays_;
     resolve::HitShading shading_;

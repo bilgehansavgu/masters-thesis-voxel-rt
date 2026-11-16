@@ -32,6 +32,7 @@ find_package(glm CONFIG REQUIRED)
 find_package(CLI11 CONFIG REQUIRED)
 find_package(Catch2 3 CONFIG REQUIRED)
 find_package(unofficial-miniply CONFIG REQUIRED)
+find_package(Stb REQUIRED)
 
 enable_testing()
 include(ThesisFormat)

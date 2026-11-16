@@ -1,3 +1,12 @@
+// ============================================================================
+// READING ORDER: FILE 22B (after SceneSetup.h)
+// ============================================================================
+// PURPOSE:
+// Implements `SceneSource` (loading `.voxels` and encoding on demand into a
+// `core::Scene`) and the factory functions for `TracerRegistry` and
+// `EncodingRegistry`.
+// ============================================================================
+
 #include "SceneSetup.h"
 
 #include "thesis/core/BoxField.h"

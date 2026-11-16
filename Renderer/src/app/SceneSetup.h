@@ -1,3 +1,19 @@
+// ============================================================================
+// READING ORDER: FILE 22A (with SceneSetup.cpp as 22B)
+// ============================================================================
+// PURPOSE:
+// Bridges the offline Voxel/Encoding world (Part 1) and the live GPU Rendering
+// world (Part 2).
+//
+// `SceneSource` either:
+//   - Generates the procedural Step 0 box field (when `--model` is not given), OR
+//   - Loads a `.voxels` file (`VoxelModel`) once into CPU RAM and keeps it in
+//     `std::optional<voxel::VoxelModel> model_`. Whenever `build(encodingIndex)`
+//     is called (at startup or when the user presses `E` in the window), it runs
+//     the chosen `IEncoding` (`brick2012_inline` or `brick2012_split`) to produce
+//     a `BuiltScene` containing a `core::Scene` ready for GPU upload!
+// ============================================================================
+
 #pragma once
 
 #include "Options.h"

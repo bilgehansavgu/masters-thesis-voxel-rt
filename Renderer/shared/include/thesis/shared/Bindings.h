@@ -1,8 +1,28 @@
-/* Descriptor binding slots: the ONLY place a slot number is written.
+/* ============================================================================
+ * READING ORDER: FILE 12 (Part 2: GPU Rendering & Tracing Pipeline)
+ * ============================================================================
+ * PURPOSE:
+ * Defines the Vulkan Descriptor Binding slots ( numbered connection ports between
+ * C++ GPU buffers and Slang GPU shaders).
  *
- * Included verbatim by C++ (src/tracing/include/thesis/tracing/Bindings.h and others) and by
- * Slang shaders. Both languages run the C preprocessor, so this file may contain nothing but
- * #defines and comments.
+ * Included verbatim by C++ and by Slang shaders. Both languages run the C
+ * preprocessor, so this file may contain nothing but `#define` and `/* ... */`
+ * comments.
+ *
+ * ----------------------------------------------------------------------------
+ * HOW BINDING SLOTS ARE PARTITIONED (Descriptor Set 0)
+ * ----------------------------------------------------------------------------
+ *   Slots 0..1:   Input Ray buffer (0) and Output Hit buffer (1) (`RayBatch`).
+ *   Slots 2..7:   Reserved for the Tracer's own search structure (e.g., Slot 2
+ *                 is the Vulkan Hardware Ray Tracing TLAS).
+ *   Slot  8:      Every primitive's world-space AABB (`StructuredBuffer<Aabb>`).
+ *   Slots 9..15:  The primitive encoding's own GPU buffers (`Scene::primitiveData`):
+ *                   - 9:  `BrickModelHeader` (grid origin, voxelSize, brickSize, etc.)
+ *                   - 10: `BrickRecord` table (one 16B record per brick)
+ *                   - 11: `cells` (primary grid cells of all bricks)
+ *                   - 12: `indirection` (16-bit run words & offsets)
+ *                   - 13: `attributes` (split layout only: 16-bit octahedral normals)
+ * ============================================================================
  */
 #ifndef THESIS_SHARED_BINDINGS_H
 #define THESIS_SHARED_BINDINGS_H

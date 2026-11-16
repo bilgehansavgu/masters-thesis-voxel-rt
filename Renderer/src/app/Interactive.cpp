@@ -1,3 +1,28 @@
+// ============================================================================
+// READING ORDER: FILE 25
+// ============================================================================
+// PURPOSE:
+// Runs the interactive GUI window (`thesis_renderer` without `--benchmark`).
+//
+// STEP 1 HIGHLIGHTS:
+// 1. `ActiveScene` & C++ Member Destruction Order:
+//    In C++, struct/class members are initialized in the exact order they are declared,
+//    and destroyed in the exact REVERSE order!
+//    Inside `ActiveScene`, `gpuScene` is declared BEFORE `tracers`. That guarantees
+//    `tracers` is destroyed first (whilst `gpuScene` is still alive), and `gpuScene`
+//    is destroyed second.
+// 2. Live Encoding Switching (Key `E` or UI radio buttons):
+//    When `panel.activeEncoding() != loadedEncoding`, we are right after
+//    `presenter.waitForPreviousFrame()`, meaning the GPU is completely idle.
+//    Calling `active.reset()` frees the old `ActiveScene`'s GPU buffers and BLAS/TLAS
+//    from VRAM *before* `load(...)` allocates the new encoding's buffers, so we never
+//    need 2x VRAM during a switch!
+// 3. Catching `tracing::UnsupportedScene`:
+//    If a tracer cannot handle the scene (e.g., `SoftwareTracer` on >30,000 bricks),
+//    `load()` catches `UnsupportedScene`, records the reason in `facts.skippedTracers`
+//    (shown in the ImGui panel), and continues with the remaining tracers (`hardware`, `null`).
+// ============================================================================
+
 #include "Interactive.h"
 
 #include "ControlPanel.h"

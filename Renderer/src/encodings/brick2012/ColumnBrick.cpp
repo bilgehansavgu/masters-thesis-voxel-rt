@@ -1,3 +1,13 @@
+// ============================================================================
+// READING ORDER: FILE 7B (after ColumnBrick.h)
+// ============================================================================
+// PURPOSE:
+// Implements the conversion between a 3D bit-packed VoxelBrick and the 2D
+// N x N column representation (ColumnBrick) used by the 2012 Reichl et al.
+// brick format, plus statistics gathering on column types and primary axis
+// choices.
+// ============================================================================
+
 #include "thesis/brick2012/ColumnBrick.h"
 
 #include "thesis/voxel/OctNormal.h"
@@ -12,18 +22,21 @@
 
 namespace thesis::brick2012 {
 
+// Returns the slice of runs belonging to `cell` using the prefix-sum array `runEnd_`.
 std::span<const Run> ColumnBrick::runs(std::uint32_t cell) const
 {
     const std::uint32_t begin = cell == 0 ? 0 : runEnd_[cell - 1];
     return std::span<const Run>(runs_).subspan(begin, runEnd_[cell] - begin);
 }
 
+// Returns the slice of 16-bit packed normals belonging to `cell`.
 std::span<const std::uint16_t> ColumnBrick::normals(std::uint32_t cell) const
 {
     const std::uint32_t begin = cell == 0 ? 0 : normalEnd_[cell - 1];
     return std::span<const std::uint16_t>(normals_).subspan(begin, normalEnd_[cell] - begin);
 }
 
+// Appends a cell's runs and normals to the flat vectors and records the new end offsets.
 void ColumnBrick::appendCell(std::span<const Run> cellRuns, std::span<const std::uint16_t> cellNormals)
 {
     runs_.insert(runs_.end(), cellRuns.begin(), cellRuns.end());
@@ -32,6 +45,10 @@ void ColumnBrick::appendCell(std::span<const Run> cellRuns, std::span<const std:
     normalEnd_.push_back(static_cast<std::uint32_t>(normals_.size()));
 }
 
+// Converts column coordinates (u, v, height) back into 3D brick-local voxel coordinates (x, y, z):
+//   - Primary axis `a` gets `height`
+//   - Secondary axis `(a + 1) % 3` gets `u`
+//   - Tertiary axis `(a + 2) % 3` gets `v`
 glm::uvec3 voxelOfColumn(std::uint32_t axis, std::uint32_t u, std::uint32_t v, std::uint32_t height)
 {
     glm::uvec3 voxel(0);
@@ -41,6 +58,14 @@ glm::uvec3 voxelOfColumn(std::uint32_t axis, std::uint32_t u, std::uint32_t v, s
     return voxel;
 }
 
+// ============================================================================
+// PRIMARY AXIS SELECTION (Reichl et al. 2012 paper rule)
+// ============================================================================
+// Decodes every voxel's normal in the brick, sums the absolute values |nx|, |ny|, |nz|,
+// and picks the axis with the largest sum.
+// Intuition: if a surface inside the brick faces mostly along +Y or -Y, then rays
+// looking down the Y axis see a single-layer heightfield (1 voxel per column = HEIGHT cell)
+// rather than a tall wall of voxels (which would require a POINTER cell).
 std::uint32_t choosePrimaryAxis(const voxel::VoxelBrick& brick)
 {
     glm::vec3 sum(0.0f);
@@ -53,6 +78,24 @@ std::uint32_t choosePrimaryAxis(const voxel::VoxelBrick& brick)
     return sum.y >= sum.z ? 1 : 2;
 }
 
+// ============================================================================
+// 3D VOXEL BRICK -> 2D COLUMN BRICK (`toColumns`)
+// ============================================================================
+// Walks every column (u, v) from height = 0 to N - 1, groups contiguous filled
+// voxels into `Run{start, length}` entries, and gathers their normals.
+//
+// How do we find a voxel's normal in `brick.normals` in O(1) time?
+// Recall from VoxelModel.h that `brick.normals` only stores normals for FILLED voxels,
+// ordered by linear voxel index `x + N * (y + N * z)`.
+// So the normal for filled voxel `index` is at position:
+//   (number of set bits in `brick.occupancy` strictly before `index`).
+//
+// We compute this in two fast steps:
+//   1. Precompute `filledBefore[word]`: a prefix sum of `std::popcount(brick.occupancy[word])`
+//      giving the total number of filled voxels in all 64-bit words before `word`.
+//   2. For a voxel at bit `(index & 63)` inside `word = index >> 6`, mask out all bits below it
+//      using `((1ull << (index & 63)) - 1)` and count them with a single hardware instruction
+//      `std::popcount(below)`.
 ColumnBrick toColumns(const voxel::VoxelBrick& brick, std::uint32_t brickSize, std::uint32_t axis)
 {
     // Number of filled voxels before each 64-bit word: gives the position of a voxel's normal.
@@ -84,8 +127,10 @@ ColumnBrick toColumns(const voxel::VoxelBrick& brick, std::uint32_t brickSize, s
                 normals.push_back(
                     brick.normals[filledBefore[index >> 6] + static_cast<std::uint32_t>(std::popcount(below))]);
                 if (inRun) {
+                    // Contiguous with the previous filled voxel in this column: extend the current run.
                     ++runs.back().length;
                 } else {
+                    // Start of a new contiguous run of filled voxels.
                     runs.push_back({static_cast<std::uint8_t>(height), 1});
                     inRun = true;
                 }
@@ -96,6 +141,12 @@ ColumnBrick toColumns(const voxel::VoxelBrick& brick, std::uint32_t brickSize, s
     return columns;
 }
 
+// ============================================================================
+// 2D COLUMN BRICK -> 3D VOXEL BRICK (`fromColumns`)
+// ============================================================================
+// The exact inverse of `toColumns`: unpacks all runs and normals from every column
+// back into 3D `(x, y, z)` occupancy bits and re-collects `brick.normals` in
+// standard linear voxel order (`index = 0 .. N^3 - 1`).
 voxel::VoxelBrick fromColumns(const ColumnBrick& columns, const glm::uvec3& coordinate)
 {
     const std::uint32_t n = columns.brickSize;
@@ -127,6 +178,8 @@ voxel::VoxelBrick fromColumns(const ColumnBrick& columns, const glm::uvec3& coor
     return brick;
 }
 
+// Tallies how many cells in `columns` are EMPTY (0 voxels), HEIGHT (1 voxel),
+// or POINTER (>= 2 voxels), and histograms the number of runs and run lengths.
 void ColumnStatistics::add(const ColumnBrick& columns)
 {
     ++bricks;
@@ -201,6 +254,13 @@ nlohmann::json AxisChoiceStatistics::toJson() const
             {"bricks_where_best_axis_differs", bricksWhereBestDiffers}};
 }
 
+// ============================================================================
+// EVALUATING THE 2012 PAPER'S PRIMARY AXIS HEURISTIC (`axisChoiceStatistics`)
+// ============================================================================
+// For every brick in parallel (`std::execution::par`), tries all 3 possible primary
+// axes (0, 1, 2), counts how many POINTER cells each axis produces, and compares the
+// axis chosen by the paper's normal-sum rule (`choosePrimaryAxis`) against the axis
+// that actually minimizes POINTER cells.
 AxisChoiceStatistics axisChoiceStatistics(const voxel::VoxelModel& model)
 {
     struct PerBrick {

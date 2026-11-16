@@ -1,5 +1,22 @@
 #pragma once
 
+// ============================================================================
+// READING ORDER: FILE 4A (Step 1 Offline Pipeline: Turning Triangles into Voxels)
+// ============================================================================
+// VOXELIZATION BASICS: How do you turn a surface made of triangles into 3D voxels?
+// There are two rules implemented here:
+//   1. `Sampled` (default, from the 2012 Reichl et al. paper):
+//      Imagine shooting a grid of parallel laser lines along X, along Y, and along Z through the
+//      center of every column of voxels `(i + 0.5, j + 0.5)`. Wherever a line pierces a triangle,
+//      we fill the single voxel containing that intersection point.
+//      WHY? Because it creates a very thin shell (almost every column has at most 1 voxel!),
+//      which compresses into `HEIGHT` cells in the 2012 format instead of needing multi-voxel runs,
+//      while still guaranteeing no axis-aligned gaps ("watertight" against flood-fill).
+//   2. `Conservative`:
+//      Fills EVERY voxel cube that touches any part of a triangle (tested with the 3D Separating
+//      Axis Theorem). This produces a thicker shell where tilted surfaces touch 2 or 3 vertically
+//      stacked voxels per column.
+
 #include "thesis/mesh/TriangleMesh.h"
 #include "thesis/voxel/VoxelModel.h"
 

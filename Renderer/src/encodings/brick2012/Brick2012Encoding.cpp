@@ -1,11 +1,15 @@
-// The brick format of Reichl et al. 2012 in two bit layouts:
+// ============================================================================
+// READING ORDER: FILE 9
+// ============================================================================
+// PURPOSE:
+// Implements `IEncoding` for both bit layouts of the 2012 Reichl et al. format:
+//   - `brick2012_inline`: attributes next to heights (32-bit cells, 4 buffers)
+//   - `brick2012_split`:  attributes in their own buffer (16-bit cells, 5 buffers)
 //
-//   brick2012_inline  attributes next to the heights, as in the paper
-//   brick2012_split   attributes in their own buffer
-//
-// Both store the same columns and runs (see ColumnBrick.h); only the place of the normals
-// differs. Every bit is defined in shared/include/thesis/shared/Brick2012.h, which the brick
-// shaders read as well.
+// Both store the exact same columns and runs (`ColumnBrick`); only the placement
+// of the 16-bit octahedral normals differs. All bit shifts and masks come from
+// `shared/include/thesis/shared/Brick2012.h`.
+// ============================================================================
 
 #include "thesis/brick2012/ColumnBrick.h"
 #include "thesis/encoding/Encoding.h"
@@ -30,7 +34,7 @@ enum class Layout : std::uint32_t {
     Split = THESIS_BRICK_LAYOUT_SPLIT,
 };
 
-// Buffer "header": facts about the whole model. std430 layout: 3 x 16 bytes.
+// Buffer "header" (binding 9): facts about the whole model. std430 layout: 3 x 16 = 48 bytes.
 struct BrickModelHeader {
     glm::vec3 origin;
     float voxelSize;
@@ -43,31 +47,49 @@ struct BrickModelHeader {
 };
 static_assert(sizeof(BrickModelHeader) == 48);
 
-// Buffer "brick table": one record per brick, at the index of its primitive. A tracer reaches
-// the data of a brick only through this record, which later lets bricks be loaded on demand.
+// Buffer "brick table" (binding 10): one 16-byte record per brick, indexed by `primitiveIndex`.
+// A tracer reaches the data of a brick ONLY through this record, which decouples the brick's
+// ID from where its cells/indirection/attributes live in memory (essential for on-demand
+// brick streaming in later steps).
 struct BrickRecord {
-    std::uint32_t position;        // brick coordinate and primary axis, see THESIS_BRICK_*
+    std::uint32_t position;        // brick coordinate (x,y,z in 10 bits each) + primary axis (bits 30..31)
     std::uint32_t cellBase;        // index of the brick's first cell in the cell buffer
-    std::uint32_t indirectionBase; // index of the brick's first word in the indirection buffer
-    std::uint32_t attributeBase;   // split layout: index of the brick's first normal
+    std::uint32_t indirectionBase; // index of the brick's first 16-bit word in the indirection buffer
+    std::uint32_t attributeBase;   // split layout: index of the brick's first 16-bit normal in attributes
 };
 static_assert(sizeof(BrickRecord) == 16);
 
+// Because each brick coordinate (x, y, z) is packed into 10 bits in `BrickRecord::position`,
+// a grid can have at most 2^10 = 1024 bricks per axis (e.g., 8192^3 voxels with 8^3 bricks).
 constexpr std::uint32_t kMaxBricksPerAxis = 1u << THESIS_BRICK_COORDINATE_BITS;
 
+// Packs a `Run{start, length}` into a 16-bit indirection word:
+//   bits 0..5:  start
+//   bits 6..11: length - 1 (since length >= 1)
+//   bit 12:     1 if this is the last run in the column, 0 otherwise
 std::uint16_t packRun(const Run& run, bool last)
 {
     return static_cast<std::uint16_t>(run.start | ((run.length - 1u) << THESIS_RUN_LENGTH_SHIFT) |
                                       (last ? THESIS_RUN_LAST_BIT : 0u));
 }
 
+// Unpacks a 16-bit indirection word back into `Run{start, length}`.
 Run unpackRun(std::uint16_t word)
 {
     return {static_cast<std::uint8_t>(word & THESIS_RUN_START_MASK),
             static_cast<std::uint8_t>(((word >> THESIS_RUN_LENGTH_SHIFT) & THESIS_RUN_LENGTH_MASK) + 1u)};
 }
 
-// One brick encoded on its own. Offsets inside it count from the start of the brick's data.
+// Intermediate result for one brick encoded independently on a worker thread.
+// Offsets inside `EncodedBrick` count from 0 (the start of THIS brick's data);
+// when all bricks are concatenated into global GPU buffers, `BrickRecord` stores
+// the brick's global base indices (`cellBase`, `indirectionBase`, `attributeBase`).
+//
+// C++ CONCURRENCY NOTE: Why `const char* error` instead of `throw`?
+// In C++, if an exception escapes a lambda inside `std::for_each(std::execution::par, ...)`,
+// the C++ standard requires calling `std::terminate()` immediately! To report errors safely
+// from parallel worker threads, we record `out.error` and throw on the main thread after
+// the parallel loop finishes.
 struct EncodedBrick {
     std::uint32_t axis = 0;
     core::Aabb bounds{};
@@ -78,6 +100,14 @@ struct EncodedBrick {
     const char* error = nullptr; // set instead of throwing: this runs inside a parallel loop
 };
 
+// ============================================================================
+// INLINE ENCODER (`brick2012_inline`)
+// ============================================================================
+// - EMPTY (0 voxels):   cell = 0
+// - HEIGHT (1 voxel):   cell packs kind=1, height (bits 2..7), and 16-bit normal (bits 8..23).
+// - POINTER (>1 voxel): cell packs kind=2 and the brick-local offset into `out.indirection`.
+//                       Appends all packed run words, followed immediately by all voxel normals
+//                       for that column, into `out.indirection`.
 void encodeInline(const ColumnBrick& columns, EncodedBrick& out)
 {
     for (std::uint32_t cell = 0; cell < columns.cellCount(); ++cell) {
@@ -104,6 +134,16 @@ void encodeInline(const ColumnBrick& columns, EncodedBrick& out)
     }
 }
 
+// ============================================================================
+// SPLIT ENCODER (`brick2012_split`)
+// ============================================================================
+// Keeps cells 16-bit and puts all normals into `out.attributes`:
+// - All HEIGHT-cell normals come first in `out.attributes`, followed by all POINTER-column
+//   normals (`pointerNormals`).
+// - The first N words of `out.indirection` store the row prefix sums:
+//   `out.indirection[v]` = how many HEIGHT cells appeared in rows `0 .. v-1`.
+// - Each POINTER column writes 1 word (`firstNormal` index in `out.attributes`) followed
+//   by its packed run words into `out.indirection`.
 void encodeSplit(const ColumnBrick& columns, EncodedBrick& out)
 {
     const std::uint32_t n = columns.brickSize;
@@ -146,7 +186,9 @@ void encodeSplit(const ColumnBrick& columns, EncodedBrick& out)
     out.attributes.insert(out.attributes.end(), pointerNormals.begin(), pointerNormals.end());
 }
 
-// The box around the filled voxels of a brick, in world space.
+// Computes the tight world-space Axis-Aligned Bounding Box (AABB) around ONLY the filled
+// voxels of a brick (rather than the full N x N x N cube). Tight bounds make ray-AABB tests
+// skip empty borders around partially filled bricks!
 core::Aabb boundsOf(const ColumnBrick& columns, const glm::uvec3& coordinate, const voxel::VoxelGrid& grid)
 {
     const std::uint32_t n = columns.brickSize;
@@ -166,6 +208,9 @@ core::Aabb boundsOf(const ColumnBrick& columns, const glm::uvec3& coordinate, co
                       grid.origin + grid.voxelSize * glm::vec3(first + hi + 1u)};
 }
 
+// Copies raw array bytes into a `std::vector<std::byte>` padded to a multiple of 4 bytes
+// (and at least 4 bytes), because Vulkan storage buffers (`StructuredBuffer<uint>`) are
+// indexed in 32-bit words and cannot have size 0.
 std::vector<std::byte> toBytes(const void* data, std::size_t bytes)
 {
     // Padded to whole 32-bit words (a shader reads 32-bit words), and never empty.
@@ -319,6 +364,10 @@ public:
         return result;
     }
 
+    // Reconstructs the exact `VoxelModel` from the raw GPU buffers in `scene`.
+    // Note that in `decodeSplit`, finding a HEIGHT cell's normal uses the exact same algorithm
+    // that the GPU shader will use in Step 2: reading the row's prefix sum from `indirection`
+    // and counting earlier HEIGHT cells in the same row!
     voxel::VoxelModel decode(const core::Scene& scene) const override
     {
         const std::vector<std::byte>& headerBytes = bufferAt(scene, THESIS_BINDING_BRICK_HEADER);

@@ -1,5 +1,20 @@
 #pragma once
 
+// ============================================================================
+// READING ORDER: FILE 6 (The `IEncoding` Socket: VoxelModel <-> GPU Scene)
+// ============================================================================
+// Just as `ITracer` is the plug-in socket for ray tracers, `IEncoding` is the plug-in socket
+// for compressed voxel formats (`brick2012_inline`, `brick2012_split`, and later a baseline
+// format in Step 5).
+//
+// Every encoding must obey two contracts:
+//   1. `encode(model)` produces a `core::Scene` where each brick is one primitive (`primitiveBounds`
+//      at slot 8) and the encoding's packed byte buffers sit in `primitiveData` (slots 9..15),
+//      with `primitiveKind` set to the encoding's name so the matching shader
+//      `shaders/primitives/<name>/primitive.slang` is used.
+//   2. Lossless round-trip: `decode(encode(model).scene)` must reconstruct the exact same filled
+//      voxels and 16-bit normals (`sameVoxels(decoded, model) == true`).
+
 #include "thesis/core/Registry.h"
 #include "thesis/core/Scene.h"
 #include "thesis/voxel/VoxelModel.h"
@@ -56,6 +71,7 @@ struct MemoryReport {
     std::vector<Buffer> buffers; // the bounds first, then the buffers of the encoding
     std::uint64_t totalBytes = 0;
 
+    // Total GPU memory in bits divided by the number of filled surface voxels.
     [[nodiscard]] double bitsPerVoxel(std::uint64_t voxels) const;
     [[nodiscard]] nlohmann::json toJson(std::uint64_t voxels) const;
 };

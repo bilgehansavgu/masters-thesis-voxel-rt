@@ -1,5 +1,15 @@
 #pragma once
 
+// ============================================================================
+// READING ORDER: FILE 5 (Saving & loading `.voxels` files on disk)
+// ============================================================================
+// WHY DO WE SAVE UNCOMPRESSED VOXELS TO DISK INSTEAD OF ENCODED BRICKS?
+// Voxelizing a huge mesh like Lucy at 8192 resolution takes several seconds, whereas encoding
+// those voxels into `brick2012_inline` or `brick2012_split` takes ~1.5s.
+// By saving the plain `VoxelModel` to a `.voxels` file once (`thesis_model voxelize`), the
+// renderer can load that `.voxels` file and switch between different encodings live in the window
+// (pressing `E`), and `thesis_model report` can compare all encodings on the exact same voxels!
+
 #include "thesis/voxel/VoxelModel.h"
 
 #include <filesystem>

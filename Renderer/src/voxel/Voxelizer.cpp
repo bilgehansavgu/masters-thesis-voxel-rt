@@ -1,5 +1,9 @@
 #include "thesis/voxel/Voxelizer.h"
 
+// ============================================================================
+// READING ORDER: FILE 4B (Voxelizer implementation: 2D edge functions & parallel brick binning)
+// ============================================================================
+
 #include "thesis/voxel/OctNormal.h"
 
 #include <glm/common.hpp>
@@ -10,7 +14,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <execution>
+#include <execution> // C++17 parallel algorithms (`std::execution::par`, `std::execution::par_unseq`)
 #include <numeric>
 #include <stdexcept>
 #include <string>
@@ -26,6 +30,7 @@ double secondsSince(Clock::time_point start)
 }
 
 // A triangle in voxel units: voxel (x, y, z) is the cube [x, x+1] x [y, y+1] x [z, z+1].
+// Uses double precision (`glm::dvec3`) so large grids (e.g., 8192) do not lose precision.
 struct Triangle {
     glm::dvec3 a;
     glm::dvec3 b;
@@ -38,6 +43,17 @@ struct Scratch {
     std::vector<glm::vec3> normalSum; // per voxel; all zero between bricks
 };
 
+// GRAPHICS MATH: The 2D Edge Function (Barycentric Coordinates)
+// Given a directed 2D edge from `p` to `q` and a 2D sample point `s`, the 2D cross product
+// `(q.x - p.x)*(s.y - p.y) - (q.y - p.y)*(s.x - p.x)` equals twice the signed area of triangle (p, q, s):
+//   - Positive when `s` is to the left of `p -> q`
+//   - Negative when `s` is to the right of `p -> q`
+//   - Zero when `s` lies directly on the line `p -> q`
+// A point `s` is inside 2D triangle `(a, b, c)` if and only if all three edge functions
+// `wa = edge(b, c, s)`, `wb = edge(c, a, s)`, and `wc = edge(a, b, s)` have the same sign!
+// Moreover, `(wa / sum, wb / sum, wc / sum)` are the exact barycentric weights for interpolating
+// the triangle's depth at `s`.
+//
 // Twice the signed area of the 2D triangle (p, q, s). The two end points are put into a fixed
 // order first, so edge(p, q, s) == -edge(q, p, s) holds exactly, rounding included. Two
 // triangles that share an edge can then never both reject a sample next to that edge, which
@@ -60,6 +76,10 @@ void fill(Scratch& scratch, std::uint32_t brickSize, const glm::ivec3& voxel, co
 }
 
 // VoxelizationRule::Sampled, for the voxels [lo, lo + n) of one brick.
+// Projects the triangle onto each of the 3 coordinate planes (YZ when axis=0, ZX when axis=1,
+// XY when axis=2), tests every column center `(i + 0.5, j + 0.5)` inside the triangle's 2D
+// bounding box, and computes the depth `k` along `axis` where the column's center line hits the
+// triangle.
 void fillSampled(const Triangle& t, const glm::vec3& normal, const glm::ivec3& lo, int n, Scratch& scratch)
 {
     for (int axis = 0; axis < 3; ++axis) {
@@ -110,6 +130,11 @@ void fillSampled(const Triangle& t, const glm::vec3& normal, const glm::ivec3& l
 }
 
 // True when the triangle touches the cube with the given centre and half side (separating axis test).
+// By the Separating Axis Theorem (SAT), a triangle and an axis-aligned cube do NOT overlap if and
+// only if there is at least one separating axis among these 13 axes:
+//   - The 3 cube face normals (X, Y, Z axes)
+//   - The 1 triangle normal (`cross(edges[0], edges[1])`)
+//   - The 9 cross products of each cube axis with each of the 3 triangle edges.
 bool triangleTouchesCube(const glm::dvec3& centre, double half, const Triangle& t)
 {
     const glm::dvec3 corners[3] = {t.a - centre, t.b - centre, t.c - centre};
@@ -236,8 +261,11 @@ VoxelModel voxelize(const mesh::TriangleMesh& mesh, const VoxelizeOptions& optio
                         toVoxelUnits(mesh.indices[3 * triangle + 2])};
     };
 
-    // 1. Sort the triangles into bricks: one (brick, triangle) entry for every brick that the
-    //    bounding box of a triangle overlaps. Sorting the entries groups them by brick.
+    // 1. Sort the triangles into bricks ("binning"): one 64-bit `(brick << 32) | triangle` entry
+    //    for every brick that the bounding box of a triangle overlaps.
+    //    Because `brick` is in the upper 32 bits, sorting `entries` in parallel (`std::execution::par_unseq`)
+    //    groups all triangles belonging to the same brick into a contiguous slice `[begin, end)`,
+    //    and within each brick keeps the triangles in deterministic ascending `triangle` index order!
     const Clock::time_point binStart = Clock::now();
     std::uint64_t degenerate = 0;
     std::vector<std::uint64_t> entries;
@@ -275,8 +303,9 @@ VoxelModel voxelize(const mesh::TriangleMesh& mesh, const VoxelizeOptions& optio
     }
     const double binSeconds = secondsSince(binStart);
 
-    // 2. Fill each brick from its own triangles. Bricks do not share voxels, so they run in
-    //    parallel; each result goes to its own slot, so the order of the output is fixed.
+    // 2. Fill each brick from its own triangles across all CPU cores (`std::execution::par`).
+    //    Bricks do not share voxels, so threads never collide; `thread_local Scratch` gives each
+    //    worker thread its own reusable working buffer without reallocating memory on every brick.
     const Clock::time_point fillStart = Clock::now();
     const std::size_t words = voxelsPerBrick(n) / 64;
     std::vector<VoxelBrick> filled(jobs.size());
@@ -305,7 +334,7 @@ VoxelModel voxelize(const mesh::TriangleMesh& mesh, const VoxelizeOptions& optio
 
         const std::uint32_t count = filledCount(scratch.occupancy);
         if (count == 0) {
-            return; // the triangles came near this brick but filled none of its voxels
+            return; // the triangles came near this brick's bounding box but filled none of its voxels
         }
         VoxelBrick& brick = filled[jobIndex];
         brick.coordinate = coordinate;

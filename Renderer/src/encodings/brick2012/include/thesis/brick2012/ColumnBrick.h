@@ -1,5 +1,22 @@
 #pragma once
 
+// ============================================================================
+// READING ORDER: FILE 7A (The 2012 Format's Core Idea: Primary Grid & Runs)
+// ============================================================================
+// THE 2012 PAPER'S KEY INSIGHT (Reichl et al. 2012):
+// Within a single small brick (e.g. 32 x 32 x 32 voxels), the 3D surface is usually mostly flat
+// and faces one main coordinate axis (`axis`: 0 = X, 1 = Y, or 2 = Z).
+// If we look at the brick head-on along that **primary axis**, the brick becomes an N x N 2D
+// "primary grid" of columns (each column is N voxels tall along `axis`):
+//   - Many columns are completely empty (`EMPTY` cell: 0 voxels).
+//   - Most non-empty columns pierce the surface only ONCE (`HEIGHT` cell: 1 voxel, like a 2D
+//     heightmap!).
+//   - Only a few columns (< 1% on Lucy with sampled voxelization!) have multiple filled voxels
+//     (`POINTER` cell: stored as a list of contiguous filled intervals called `Run`s).
+//
+// `ColumnBrick` is the clean intermediate form that groups a `VoxelBrick` into N x N columns of
+// `Run`s before packing them into bits (`Brick2012Encoding.cpp`).
+
 #include "thesis/voxel/VoxelModel.h"
 
 #include <glm/vec3.hpp>
@@ -12,7 +29,8 @@
 
 namespace thesis::brick2012 {
 
-// A row of filled voxels in one column: `length` voxels starting at height `start`.
+// A row of filled voxels in one column: `length` contiguous filled voxels starting at `start`
+// (where `start` is in 0 .. brickSize - 1, and `length` is in 1 .. brickSize).
 struct Run {
     std::uint8_t start = 0;
     std::uint8_t length = 0;
@@ -38,13 +56,19 @@ struct ColumnBrick {
     void appendCell(std::span<const Run> cellRuns, std::span<const std::uint16_t> cellNormals);
 
 private:
+    // Flat prefix-sum arrays: instead of allocating 1,024 tiny `std::vector`s per brick (slow!),
+    // all runs of the brick sit in one flat `runs_` vector, and cell `c`'s runs are the slice
+    // `runs_[runEnd_[c - 1] .. runEnd_[c])`.
     std::vector<std::uint32_t> runEnd_;    // per cell: index one past its last run
     std::vector<Run> runs_;                // all columns, in cell order
     std::vector<std::uint32_t> normalEnd_; // per cell: index one past its last normal
     std::vector<std::uint16_t> normals_;   // all columns, in cell order
 };
 
-// Position inside the brick of the voxel at `height` in cell (u, v).
+// Maps 2D column coordinate `(u, v)` and column depth `height` back to 3D brick voxel `(x, y, z)`:
+//   voxel[axis]           = height
+//   voxel[(axis + 1) % 3] = u
+//   voxel[(axis + 2) % 3] = v
 [[nodiscard]] glm::uvec3 voxelOfColumn(std::uint32_t axis, std::uint32_t u, std::uint32_t v, std::uint32_t height);
 
 // The rule of Reichl et al. 2012: the axis closest to the average normal of the brick. Here: the

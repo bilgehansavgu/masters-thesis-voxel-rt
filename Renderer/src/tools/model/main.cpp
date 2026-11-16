@@ -1,11 +1,20 @@
-// thesis_model: the offline side of the pipeline (mesh -> voxels -> encoded bricks).
+// ============================================================================
+// READING ORDER: FILE 10
+// ============================================================================
+// PURPOSE:
+// Entry point for the `thesis_model` CLI executable: the offline side of the
+// pipeline (`mesh -> voxels -> encoded bricks & JSON reports`).
 //
-//   thesis_model voxelize --mesh lucy.ply --resolution 2048 --output lucy-2048.voxels
-//       Reads a triangle mesh and writes a voxel file.
-//   thesis_model report --model lucy-2048.voxels
-//       Encodes the voxel file with every encoding, decodes it again and compares the result
-//       with the input voxel by voxel. Prints the size of every buffer and writes all numbers
-//       to a results file that names the code version.
+// Subcommands:
+//   1. `thesis_model voxelize --mesh lucy.ply --resolution 2048 --output lucy-2048.voxels`
+//      Reads a PLY triangle mesh, optionally rotates Z-up meshes (like Stanford Lucy)
+//      to Y-up, voxelizes the triangles into N x N x N bricks, and writes `.voxels`.
+//   2. `thesis_model report --model lucy-2048.voxels`
+//      Encodes the `.voxels` file with every registered encoding (`brick2012_inline`,
+//      `brick2012_split`), decodes the GPU buffers back into a `VoxelModel`, verifies
+//      that `sameVoxels(decoded, model)` is 100% lossless, prints memory/bits-per-voxel
+//      tables, and saves a timestamped JSON report in `results/`.
+// ============================================================================
 
 #include "thesis/encodings/BuiltInEncodings.h"
 #include "thesis/mesh/TriangleMesh.h"
@@ -69,7 +78,8 @@ int runVoxelize(const std::filesystem::path& meshPath, std::filesystem::path out
     const Clock::time_point loadStart = Clock::now();
     mesh::TriangleMesh mesh = mesh::loadPly(meshPath);
     if (upAxis == "z") {
-        // The renderer treats +y as up. Turn the mesh a quarter turn around x: (x, y, z) -> (x, z, -y).
+        // The renderer treats +y as up. Many scanned statues (like Stanford Lucy) use +z as up.
+        // Turn the mesh a quarter turn (-90 degrees) around the X axis: (x, y, z) -> (x, z, -y).
         for (glm::vec3& position : mesh.positions) {
             position = {position.x, position.z, -position.y};
         }

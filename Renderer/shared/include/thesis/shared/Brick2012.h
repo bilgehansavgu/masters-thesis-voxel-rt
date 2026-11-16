@@ -1,12 +1,22 @@
-/* Bit layout of the 2012 brick format: the ONLY place these numbers are written.
+/* ============================================================================
+ * READING ORDER: FILE 8
+ * ============================================================================
+ * PURPOSE:
+ * Defines the exact bit-level layout of the 2012 brick format (Reichl et al. 2012)
+ * in a single shared header included by both C++ (`Brick2012Encoding.cpp`) and
+ * Slang GPU shaders (`shaders/primitives/brick2012_*/primitive.slang`).
  *
- * Read by the C++ encoder (src/encodings/brick2012) and, from step 2 on, by the brick shaders.
- * Like Bindings.h, this file may contain nothing but #defines and comments.
+ * Like `Bindings.h`, this file contains ONLY `#define` macros and `/* ... */`
+ * comments so both the C++20 compiler and Slang shader compiler can preprocess it.
  *
- * A brick has N x N x N voxels (N = 8, 16 or 32). Its primary grid has N x N cells. Cell (u, v)
- * stands for the column of N voxels along the primary axis `a` of the brick, at position u on
- * axis (a + 1) % 3 and position v on axis (a + 2) % 3. The cell index is u + N * v. A height is
- * a position in the column, 0 .. N - 1. A run is a row of filled voxels in one column.
+ * ----------------------------------------------------------------------------
+ * VISUALIZING THE BIT LAYOUTS
+ * ----------------------------------------------------------------------------
+ * A brick has N x N x N voxels (N = 8, 16 or 32). Its primary grid has N x N cells.
+ * Cell (u, v) stands for the column of N voxels along the primary axis `a` of the
+ * brick, at position u on axis (a + 1) % 3 and position v on axis (a + 2) % 3.
+ * The cell index is `u + N * v`. A height is a position in the column, 0 .. N - 1.
+ * A run is a contiguous segment of filled voxels in one column.
  *
  * Buffers (bindings in Bindings.h):
  *   header       BrickModelHeader: grid origin, voxel size, N, brick count, layout number
@@ -15,28 +25,50 @@
  *   indirection  16-bit words, see below
  *   attributes   split layout only: 16-bit normals
  *
- * Every cell has its kind in bits 0..1:
- *   EMPTY    no filled voxel in the column
- *   HEIGHT   exactly one filled voxel; bits 2..7 hold its height
- *   POINTER  more than one filled voxel; bits 2.. hold the offset of the column's words in the
- *            indirection buffer, counted from the start of the brick's part of that buffer
+ * Every cell has its kind in bits 0..1 (`cell & 0x3`):
+ *   0 = EMPTY    no filled voxel in the column
+ *   1 = HEIGHT   exactly one filled voxel; bits 2..7 hold its height (0..N-1)
+ *   2 = POINTER  more than one filled voxel; bits 2.. hold the offset of the column's
+ *                words in the indirection buffer, counted from the start of the brick's
+ *                part of that buffer (`BrickRecord.indirectionBase`)
  *
- * INLINE layout (the order of Reichl et al. 2012: attributes next to the heights)
- *   cell         32 bits. HEIGHT: bits 8..23 hold the normal of the voxel.
- *   indirection  per POINTER column: its run words, then one normal per voxel, ascending height.
+ * ----------------------------------------------------------------------------
+ * LAYOUT 1: INLINE (`brick2012_inline`, Reichl et al. 2012)
+ * ----------------------------------------------------------------------------
+ * Normals live right next to heights:
+ *   - Cell is 32 bits:
+ *       EMPTY:   [ 00..00 | 00 (2b) ]
+ *       HEIGHT:  [ unused (8b) | normal (16b, bits 8..23) | height (6b, bits 2..7) | 01 (2b) ]
+ *       POINTER: [ indirection word offset (30b, bits 2..31)                       | 10 (2b) ]
+ *   - Indirection buffer (per POINTER column):
+ *       [ run_0 (16b) ] ... [ run_k (16b, bit 12 = 1) ] [ normal_0 (16b) ] ... [ normal_m (16b) ]
  *
- * SPLIT layout (attributes in their own buffer)
- *   cell         16 bits.
- *   indirection  per brick: N words first, word v = number of HEIGHT cells in the rows before
- *                row v. Then per POINTER column: one word with the index of the column's first
- *                normal, then its run words.
- *   attributes   per brick: the normals of all HEIGHT cells in cell order, then the normals of
- *                the POINTER columns in cell order, ascending height. Indices count from the
- *                start of the brick's part of the buffer.
- *                The normal of HEIGHT cell (u, v) is at index
- *                word v + (number of HEIGHT cells among cells (0, v) .. (u - 1, v)).
+ * ----------------------------------------------------------------------------
+ * LAYOUT 2: SPLIT (`brick2012_split`)
+ * ----------------------------------------------------------------------------
+ * Geometry (heights/runs) is separated from shading attributes (normals) so that
+ * shadow rays or primary ray traversal never fetch normal bytes until a final hit!
+ *   - Cell is 16 bits (half the size of inline!):
+ *       EMPTY:   [ 00..00 | 00 (2b) ]
+ *       HEIGHT:  [ unused (8b) | height (6b, bits 2..7) | 01 (2b) ]
+ *       POINTER: [ indirection word offset (14b, bits 2..15) | 10 (2b) ]
+ *   - Indirection buffer (per brick):
+ *       First N words: `rowPrefix[v]` = number of HEIGHT cells in rows 0 .. v-1.
+ *       Then per POINTER column:
+ *         [ firstNormalIndex (16b) ] [ run_0 (16b) ] ... [ run_k (16b, bit 12 = 1) ]
+ *   - Attributes buffer (per brick):
+ *       First all HEIGHT-cell normals in cell order, then all POINTER-column normals.
+ *       To find the normal of HEIGHT cell (u, v) without storing an index inside the
+ *       16-bit cell: start with `rowPrefix[v]` from the indirection buffer, and add
+ *       the number of HEIGHT cells earlier in row `v` (columns `0 .. u - 1`).
  *
- * Run word: bits 0..5 first height, bits 6..11 length - 1, bit 12 set on the last run of the column.
+ * ----------------------------------------------------------------------------
+ * 16-BIT RUN WORD
+ * ----------------------------------------------------------------------------
+ *   bits 0..5  (6 bits): `start` height (0 .. 63)
+ *   bits 6..11 (6 bits): `length - 1` (so length 1..64 fits in 0..63)
+ *   bit  12    (1 bit) : `THESIS_RUN_LAST_BIT` (1 on the last run of the column)
+ * ============================================================================
  */
 #ifndef THESIS_SHARED_BRICK2012_H
 #define THESIS_SHARED_BRICK2012_H

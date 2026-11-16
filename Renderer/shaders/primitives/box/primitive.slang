@@ -1,3 +1,6 @@
+// ============================================================================
+// READING ORDER: FILE 14B (after aabb.slang)
+// ============================================================================
 // Primitive kind "box": every primitive is a solid axis-aligned box.
 //
 // THE PRIMITIVE CONTRACT. Every primitive kind (box, the voxel brick layouts) provides, in a
@@ -11,6 +14,7 @@
 //
 // Every tracer is compiled once per kind and only calls these, so a new kind changes what is
 // inside a primitive without touching any tracer.
+// ============================================================================
 
 import types;
 import aabb;

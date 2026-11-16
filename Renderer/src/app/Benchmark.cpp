@@ -1,3 +1,19 @@
+// ============================================================================
+// READING ORDER: FILE 26
+// ============================================================================
+// PURPOSE:
+// Runs the headless scientific benchmark (`thesis_renderer --benchmark`).
+//
+// STEP 1 HIGHLIGHTS:
+// - Uses `SceneSource` (`source.build(source.initialEncoding())`) so it can benchmark
+//   either the Step 0 box field or a `.voxels` model encoded with `--encoding`.
+// - Records encoding statistics, buffer sizes, and bits-per-voxel in the output JSON
+//   file (`<timestamp>_<tracer>_<encoding>.json`).
+// - If a tracer throws `tracing::UnsupportedScene` (such as `software` on a large
+//   voxel model when running all tracers by default), prints `skipped: <reason>`
+//   and moves on to the next tracer.
+// ============================================================================
+
 #include "Benchmark.h"
 
 #include "FramePipeline.h"

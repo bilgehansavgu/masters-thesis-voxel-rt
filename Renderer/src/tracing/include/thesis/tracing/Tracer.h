@@ -1,3 +1,18 @@
+// ============================================================================
+// READING ORDER: FILE 20C (after RayBatch.h and GpuScene.h)
+// ============================================================================
+// PURPOSE:
+// Defines the central C++ interface (`ITracer`) that every ray tracer plugin
+// (`null`, `software`, `hardware`) must implement.
+//
+// C++ SYNTAX NOTE:
+// - `class UnsupportedScene : public std::runtime_error`:
+//   `using std::runtime_error::runtime_error;` is an "inheriting constructor"
+//   declaration (C++11). It tells the compiler to automatically expose all of
+//   `std::runtime_error`'s constructors on `UnsupportedScene` without writing
+//   boilerplate forwarding constructors.
+// ============================================================================
+
 #pragma once
 
 #include "thesis/core/Registry.h"
@@ -31,7 +46,8 @@ struct PrepareReport {
 };
 
 // Thrown by ITracer::prepare() when a tracer cannot handle a scene (for example too many
-// primitives for a tracer without a search structure). The message says why.
+// primitives for a tracer without a search structure, such as `SoftwareTracer` when
+// `primitiveCount() > 30000`). The message says why.
 class UnsupportedScene : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;

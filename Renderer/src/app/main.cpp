@@ -1,3 +1,13 @@
+// ============================================================================
+// READING ORDER: FILE 24
+// ============================================================================
+// PURPOSE:
+// Entry point (`int main`) for the `thesis_renderer` executable.
+// Parses command-line options (`--model`, `--encoding`, `--tracer`, `--benchmark`,
+// etc.) using CLI11 and dispatches to either `runBenchmark` (headless) or
+// `runInteractive` (live GLFW + ImGui window).
+// ============================================================================
+
 #include "Benchmark.h"
 #include "Interactive.h"
 #include "Options.h"

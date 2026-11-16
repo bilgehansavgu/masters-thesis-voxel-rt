@@ -1,7 +1,23 @@
+// ============================================================================
+// READING ORDER: FILE 21B (after NullTracer.cpp)
+// ============================================================================
 // Software tracer: a compute shader with no help from the ray tracing hardware.
 //
-// Step 0 version: every ray is tested against every primitive. Slow on purpose; it is the
-// simplest correct answer. Step 3 replaces the loop with our own search structure over bricks.
+// Step 0 / Step 1 version: every ray is tested against every primitive. Slow on purpose;
+// it is the simplest correct answer. Step 3 replaces the loop with our own search
+// structure over bricks.
+//
+// STEP 1 UPDATE (`kMaxPrimitives = 30000`):
+// Why does `prepare()` throw `tracing::UnsupportedScene` when `scene.primitiveCount > 30000`?
+// Because a voxelized model like Stanford Lucy has hundreds of thousands of bricks!
+// At 1920x1080 (2,073,600 rays), testing 100,000+ bricks per ray in a brute-force loop
+// means > 200 billion loop iterations in a single GPU dispatch. On Windows, if a single
+// GPU command takes longer than ~2 seconds, the Windows Timeout Detection and Recovery
+// (TDR) watchdog assumes the GPU froze and resets the graphics driver!
+// Throwing `UnsupportedScene` lets `Interactive` and `Benchmark` gracefully skip the
+// brute-force software tracer on huge voxel models until Step 3 adds an acceleration
+// structure for the software tracer.
+// ============================================================================
 
 #include "thesis/gpu/ComputeKernel.h"
 #include "thesis/tracing/Bindings.h"

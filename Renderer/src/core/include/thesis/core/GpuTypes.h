@@ -33,6 +33,26 @@ struct RayWork {
     std::uint32_t cells;          // cells of primary grids the ray visited
     std::uint32_t runs;           // runs the ray was tested against
     std::uint32_t hitCell;        // kind of the cell with the hit: THESIS_HIT_CELL_* in thesis/shared/Hit.h
+    // Cells or nodes of the tracer's own search structure that the ray read. 0 for the hardware
+    // tracer: the GPU does not tell how many nodes of its BVH a ray visits.
+    std::uint32_t structureSteps;
+    // Cells of the min/max mipmaps of the bricks that the ray read. 0 for an encoding without mipmap.
+    std::uint32_t mipmapCells;
+    std::uint32_t mipmapSkips;   // of those, the cells whose square the ray passed by, so the walk skipped it
+    std::uint32_t skippedLevels; // bit L is set if the walk skipped a square of level L (2^L x 2^L cells)
+};
+
+// One step of the ray log, or its header (entry 0). The meaning of the fields depends on `kind`:
+// thesis/shared/RayLog.h.
+struct RayLogEntry {
+    std::uint32_t kind;
+    std::uint32_t a;
+    std::uint32_t b;
+    std::uint32_t c;
+    std::uint32_t d;
+    std::uint32_t e;
+    std::uint32_t f;
+    float t;
 };
 
 inline constexpr std::uint32_t kNoHit = 0xFFFFFFFFu;
@@ -50,7 +70,8 @@ struct Aabb {
 static_assert(sizeof(Ray) == 32);
 static_assert(offsetof(Ray, tMin) == 12 && offsetof(Ray, direction) == 16 && offsetof(Ray, tMax) == 28);
 static_assert(sizeof(Hit) == 16);
-static_assert(sizeof(RayWork) == 16);
+static_assert(sizeof(RayWork) == 32);
+static_assert(sizeof(RayLogEntry) == 32);
 static_assert(sizeof(Aabb) == 32);
 static_assert(offsetof(Aabb, hi) == 12 && offsetof(Aabb, pad0) == 24);
 

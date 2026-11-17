@@ -93,6 +93,14 @@ Context::Context(const ContextOptions& options)
     }
     physicalDevice_ = unwrap(selector.select(), "Selecting a GPU with hardware ray tracing");
     memoryBudget_ = physicalDevice_.enable_extension_if_present(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+    // The driver's report on each compiled shader, for example how many registers one thread
+    // uses. It is only read, never needed, so a driver without it is fine.
+    VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR executableFeatures{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_EXECUTABLE_PROPERTIES_FEATURES_KHR};
+    executableFeatures.pipelineExecutableInfo = VK_TRUE;
+    pipelineStatistics_ =
+        physicalDevice_.enable_extension_if_present(VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME) &&
+        physicalDevice_.enable_extension_features_if_present(executableFeatures);
 
     device_ = unwrap(vkb::DeviceBuilder(physicalDevice_).build(), "Creating the Vulkan device");
     dispatch_ = device_.make_table();

@@ -182,9 +182,48 @@ ComputeKernel::ComputeKernel(const Context& context, const KernelDescription& de
     pipelineInfo.stage.module = module;
     pipelineInfo.stage.pName = "main";
     pipelineInfo.layout = pipelineLayout_;
+    if (context_.pipelineStatistics()) {
+        pipelineInfo.flags |= VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR;
+    }
     const VkResult result = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline_);
     vkDestroyShaderModule(device, module, nullptr);
     THESIS_VK_CHECK(result);
+    readStatistics();
+}
+
+void ComputeKernel::readStatistics()
+{
+    if (!context_.pipelineStatistics()) {
+        return;
+    }
+    // A compute pipeline has one executable: the compiled shader.
+    VkPipelineExecutableInfoKHR executable{VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_INFO_KHR};
+    executable.pipeline = pipeline_;
+    executable.executableIndex = 0;
+    std::uint32_t count = 0;
+    THESIS_VK_CHECK(context_.dispatch().getPipelineExecutableStatisticsKHR(&executable, &count, nullptr));
+    std::vector<VkPipelineExecutableStatisticKHR> raw(count, {VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_STATISTIC_KHR});
+    THESIS_VK_CHECK(context_.dispatch().getPipelineExecutableStatisticsKHR(&executable, &count, raw.data()));
+    for (const VkPipelineExecutableStatisticKHR& statistic : raw) {
+        double value = 0.0;
+        switch (statistic.format) {
+        case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_BOOL32_KHR:
+            value = statistic.value.b32 ? 1.0 : 0.0;
+            break;
+        case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_INT64_KHR:
+            value = static_cast<double>(statistic.value.i64);
+            break;
+        case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR:
+            value = static_cast<double>(statistic.value.u64);
+            break;
+        case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_FLOAT64_KHR:
+            value = statistic.value.f64;
+            break;
+        default:
+            continue;
+        }
+        statistics_.push_back({statistic.name, statistic.description, value});
+    }
 }
 
 ComputeKernel::~ComputeKernel()

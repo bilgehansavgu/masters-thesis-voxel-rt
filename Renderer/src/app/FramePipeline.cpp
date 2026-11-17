@@ -29,6 +29,11 @@ void FramePipeline::trace(VkCommandBuffer cmd, tracing::ITracer& tracer, const c
     if (workCounted_ && work_.handle() == VK_NULL_HANDLE) {
         work_ = gpu::Buffer(context_, static_cast<VkDeviceSize>(batch_.count()) * sizeof(core::RayWork),
                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, gpu::MemoryUsage::DeviceLocal);
+        log_.emplace(context_);
+    }
+    logWritten_ = workCounted_ && loggedRay_.has_value();
+    if (workCounted_) {
+        log_->request(cmd, loggedRay_.value_or(tracing::kNoLoggedRay));
     }
     {
         THESIS_GPU_SCOPE(timer_, context_.tracy(), cmd, kStageRayGeneration);
@@ -38,12 +43,23 @@ void FramePipeline::trace(VkCommandBuffer cmd, tracing::ITracer& tracer, const c
     {
         THESIS_GPU_SCOPE(timer_, context_.tracy(), cmd, kStageTrace);
         if (workCounted_) {
-            tracer.traceCounting(cmd, batch_, work_);
+            tracer.traceCounting(cmd, batch_, tracing::WorkOutput{work_, log_->buffer()});
         } else {
             tracer.trace(cmd, batch_);
         }
     }
     gpu::computeToComputeBarrier(cmd);
+    if (logWritten_) {
+        log_->copyBack(cmd);
+    }
+}
+
+std::optional<tracing::RayLog> FramePipeline::rayLog() const
+{
+    if (!logWritten_) {
+        return std::nullopt;
+    }
+    return log_->read();
 }
 
 void FramePipeline::shade(VkCommandBuffer cmd, const resolve::ShadingParams& params)

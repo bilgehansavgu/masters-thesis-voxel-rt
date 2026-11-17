@@ -14,7 +14,9 @@ public struct ClosestHit
     PrimitiveHit hit;
     public WorkCounter work;
 
-    public static ClosestHit none(Ray ray)
+    // `rayIndex` is the index of the ray in the ray list. The counting variant needs it to know
+    // whether this is the ray of the ray log.
+    public static ClosestHit none(Ray ray, uint rayIndex)
     {
         ClosestHit closest;
         closest.t = ray.tMax;
@@ -22,7 +24,7 @@ public struct ClosestHit
         closest.hit.t = ray.tMax;
         closest.hit.face = 0;
         closest.hit.detail = 0;
-        closest.work = WorkCounter.start();
+        closest.work = WorkCounter.start(rayIndex);
         return closest;
     }
 
@@ -30,7 +32,7 @@ public struct ClosestHit
     // The test ends at the closest hit so far: nothing behind it can matter.
     [mutating] public bool test(Ray ray, uint primitiveId)
     {
-        work.primitiveTest();
+        work.primitiveTest(primitiveId);
         Ray shortened = ray;
         shortened.tMax = t;
         PrimitiveHit candidate;
@@ -38,6 +40,7 @@ public struct ClosestHit
             return false;
         t = candidate.t;
         primitive = primitiveId;
+        work.closerHit(primitiveId, t);
         hit = candidate;
         return true;
     }
@@ -55,6 +58,7 @@ public struct ClosestHit
             result.face = hit.face;
             result.attributes = primitiveAttributes(primitive, hit, work);
         }
+        work.result(result);
         return result;
     }
 };

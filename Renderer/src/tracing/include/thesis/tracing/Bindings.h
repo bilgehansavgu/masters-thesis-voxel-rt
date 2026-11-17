@@ -13,6 +13,7 @@ namespace thesis::tracing {
 //   7       work of each ray (write), only in the counting variant of a tracer
 //   8       primitive bounds (every primitive kind gets these)
 //   9..15   the primitive kind's own data (e.g. encoded bricks), see core::PrimitiveData
+//   16      the ray log (write), only in the counting variant of a tracer
 //
 // Tracers only use 0..7 by name. Bindings 8..15 come from GpuScene::primitiveBindings().
 inline constexpr std::uint32_t kRayBinding = THESIS_BINDING_RAYS;
@@ -20,6 +21,7 @@ inline constexpr std::uint32_t kHitBinding = THESIS_BINDING_HITS;
 inline constexpr std::uint32_t kTracerBindingFirst = THESIS_BINDING_TRACER_FIRST;
 inline constexpr std::uint32_t kTracerBindingLast = THESIS_BINDING_TRACER_LAST;
 inline constexpr std::uint32_t kRayWorkBinding = THESIS_BINDING_RAY_WORK;
+inline constexpr std::uint32_t kRayLogBinding = THESIS_BINDING_RAY_LOG;
 inline constexpr std::uint32_t kPrimitiveBoundsBinding = THESIS_BINDING_PRIMITIVE_BOUNDS;
 inline constexpr std::uint32_t kPrimitiveDataBindingFirst = THESIS_BINDING_PRIMITIVE_DATA_FIRST;
 inline constexpr std::uint32_t kPrimitiveDataBindingLast = THESIS_BINDING_PRIMITIVE_DATA_LAST;

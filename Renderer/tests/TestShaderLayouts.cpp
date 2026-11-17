@@ -1,9 +1,11 @@
-// The data formats shared by C++ and the shaders (Ray, Hit, RayWork, Aabb and the two structs of
-// the brick buffers) are declared in both languages. This test reads the shader compiler's own layout report for every
-// compiled shader and checks each shared struct against the C++ declaration, field by field. Needs no GPU.
+// The data formats shared by C++ and the shaders (Ray, Hit, RayWork, RayLogEntry, Aabb, the two structs of
+// the brick buffers and the node of the BVH tracer) are declared in both languages. This test reads the shader
+// compiler's own layout report for every compiled shader and checks each shared struct against the C++ declaration,
+// field by field. Needs no GPU.
 
 #include "thesis/brick2012/BrickBuffers.h"
 #include "thesis/core/GpuTypes.h"
+#include "thesis/tracers/software_bvh/Bvh.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
@@ -34,7 +36,9 @@ std::map<std::string, std::vector<Field>> cppLayouts()
     using core::Aabb;
     using core::Hit;
     using core::Ray;
+    using core::RayLogEntry;
     using core::RayWork;
+    using tracers::BvhNode;
     return {
         {"Ray",
          {{"origin", offsetof(Ray, origin), 12},
@@ -50,7 +54,25 @@ std::map<std::string, std::vector<Field>> cppLayouts()
          {{"primitiveTests", offsetof(RayWork, primitiveTests), 4},
           {"cells", offsetof(RayWork, cells), 4},
           {"runs", offsetof(RayWork, runs), 4},
-          {"hitCell", offsetof(RayWork, hitCell), 4}}},
+          {"hitCell", offsetof(RayWork, hitCell), 4},
+          {"structureSteps", offsetof(RayWork, structureSteps), 4},
+          {"mipmapCells", offsetof(RayWork, mipmapCells), 4},
+          {"mipmapSkips", offsetof(RayWork, mipmapSkips), 4},
+          {"skippedLevels", offsetof(RayWork, skippedLevels), 4}}},
+        {"RayLogEntry",
+         {{"kind", offsetof(RayLogEntry, kind), 4},
+          {"a", offsetof(RayLogEntry, a), 4},
+          {"b", offsetof(RayLogEntry, b), 4},
+          {"c", offsetof(RayLogEntry, c), 4},
+          {"d", offsetof(RayLogEntry, d), 4},
+          {"e", offsetof(RayLogEntry, e), 4},
+          {"f", offsetof(RayLogEntry, f), 4},
+          {"t", offsetof(RayLogEntry, t), 4}}},
+        {"BvhNode",
+         {{"lo", offsetof(BvhNode, lo), 12},
+          {"child", offsetof(BvhNode, child), 4},
+          {"hi", offsetof(BvhNode, hi), 12},
+          {"primitive", offsetof(BvhNode, primitive), 4}}},
         {"BrickModelHeader",
          {{"origin", offsetof(BrickModelHeader, origin), 12},
           {"voxelSize", offsetof(BrickModelHeader, voxelSize), 4},
@@ -58,7 +80,7 @@ std::map<std::string, std::vector<Field>> cppLayouts()
           {"brickSize", offsetof(BrickModelHeader, brickSize), 4},
           {"brickCount", offsetof(BrickModelHeader, brickCount), 4},
           {"layout", offsetof(BrickModelHeader, layout), 4},
-          {"reserved0", offsetof(BrickModelHeader, reserved0), 4},
+          {"mipmapLevels", offsetof(BrickModelHeader, mipmapLevels), 4},
           {"reserved1", offsetof(BrickModelHeader, reserved1), 4}}},
         {"BrickRecord",
          {{"position", offsetof(BrickRecord, position), 4},

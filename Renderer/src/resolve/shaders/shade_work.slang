@@ -10,7 +10,9 @@ struct ShadeWorkParams
 {
     uint width;
     uint height;
-    uint mode;   // 0 cells visited, 1 primitives tested, 2 runs tested, 3 kind of the cell at the hit
+    uint mode;   // 0 cells visited, 1 primitives tested, 2 runs tested, 3 kind of the cell at the hit,
+                 // 4 steps through the search structure, 5 mipmap cells read,
+                 // 6 the largest mipmap square that the ray skipped
     uint pad0;
     float scale; // the count that gets the last colour of the scale
     float pad1;
@@ -23,6 +25,15 @@ struct ShadeWorkParams
 [[vk::binding(THESIS_BINDING_SHADE_HITS, 0)]] StructuredBuffer<Hit> gHits;
 [[vk::binding(THESIS_BINDING_SHADE_OUTPUT, 0)]] [[vk::image_format("rgba8")]] RWTexture2D<float4> gOutput;
 [[vk::binding(THESIS_BINDING_SHADE_WORK, 0)]] StructuredBuffer<RayWork> gWork;
+
+// One colour for each mipmap level 1 to 6 (squares of 2x2 to 64x64 cells). The panel names
+// them in the legend of the view (ControlPanel.cpp).
+float3 levelColor(uint level)
+{
+    const float3 colors[6] = {float3(0.20, 0.40, 0.95), float3(0.15, 0.75, 0.30), float3(0.95, 0.85, 0.10),
+                              float3(0.95, 0.45, 0.10), float3(0.85, 0.15, 0.15), float3(0.80, 0.30, 0.85)};
+    return colors[min(level, 6u) - 1];
+}
 
 // Colour scale for a count: black (0), blue, green, yellow, red (`scale`), white (more than `scale`).
 float3 heat(float count, float scale)
@@ -49,7 +60,12 @@ void main(uint3 threadId : SV_DispatchThreadID)
     const RayWork work = gWork[index];
     float3 color;
 
-    if (gParams.mode == 3)
+    if (gParams.mode == 6)
+    {
+        // Black: the walk skipped no square, or the encoding has no mipmap.
+        color = work.skippedLevels == 0 ? float3(0.0, 0.0, 0.0) : levelColor(uint(firstbithigh(work.skippedLevels)));
+    }
+    else if (gParams.mode == 3)
     {
         // The colours of figure 7 in Reichl et al. 2012.
         if (work.hitCell == THESIS_HIT_CELL_HEIGHT)
@@ -65,7 +81,15 @@ void main(uint3 threadId : SV_DispatchThreadID)
     }
     else
     {
-        const uint count = gParams.mode == 0 ? work.cells : (gParams.mode == 1 ? work.primitiveTests : work.runs);
+        uint count = work.runs;
+        if (gParams.mode == 0)
+            count = work.cells;
+        else if (gParams.mode == 1)
+            count = work.primitiveTests;
+        else if (gParams.mode == 4)
+            count = work.structureSteps;
+        else if (gParams.mode == 5)
+            count = work.mipmapCells;
         color = heat(float(count), gParams.scale);
     }
 

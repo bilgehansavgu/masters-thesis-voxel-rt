@@ -1,7 +1,8 @@
 # Thesis Renderer
 
 Testbed for ray tracing compressed voxel data on GPUs with ray tracing hardware: the GPU's own
-search structure (hardware tracer) against our own (software tracer), behind one interface.
+search structure (hardware tracer) against our own (software tracers: grid, octree, BVH),
+behind one interface.
 
 ## The idea in one picture
 
@@ -10,17 +11,21 @@ OFFLINE, once per model                                   (thesis_model voxelize
   mesh file (PLY) → voxelizer → voxel file (.voxels)
 
 WHEN A MODEL IS LOADED, and again when the encoding is switched
-  voxel file → [ ENCODING SOCKET ] → buffers on the GPU, one primitive per brick
-                 ├─ brick2012_inline   2012 format, attributes next to the heights (the paper)
-                 ├─ brick2012_split    2012 format, attributes in their own buffer
-                 └─ (later)            a baseline format
+  voxel file → (bricks of 8, 16 or 32 voxels) → [ ENCODING SOCKET ] → buffers on the GPU, one primitive per brick
+                 ├─ brick2012_inline       2012 format, attributes next to the heights (the paper)
+                 ├─ brick2012_split        2012 format, attributes in their own buffer
+                 ├─ brick2012_inline_mip   the same with the min/max mipmap of each brick
+                 ├─ brick2012_split_mip    the same with the min/max mipmap of each brick
+                 └─ (later)                a baseline format
 
 EVERY FRAME
   camera rays → [ TRACER SOCKET ] → hits → shading → screen
-                  ├─ hardware   Vulkan ray queries walk a GPU-built BVH
-                  ├─ software   compute shader, walks our own uniform grid
-                  ├─ null       baseline: moves rays and hits, searches nothing
-                  └─ (later)    OptiX, ray tracing pipeline, ...
+                  ├─ hardware          Vulkan ray queries walk a GPU-built BVH
+                  ├─ software_grid     compute shader, walks our own uniform grid
+                  ├─ software_octree   compute shader, walks our own sparse octree
+                  ├─ software_bvh      compute shader, walks our own binary BVH (SAH build on the CPU)
+                  ├─ null              baseline: moves rays and hits, searches nothing
+                  └─ (later)           OptiX, ray tracing pipeline, ...
 
   every stage is timed on the GPU; Tracy shows it live, results files keep it
 ```
@@ -34,11 +39,13 @@ The encoding socket has one rule: **decoding the encoded data gives back the inp
 exactly.** A test checks this for every encoding, and `thesis_model report` checks it for a
 whole model.
 
-State after step 2: both tracers show a voxel model. Every tracer runs the same brick test for
-each brick that its search structure gives it: the ray walks the primary grid of the brick cell
-by cell and tests the filled voxels of each column (`shaders/common/brick2012.slang`). Not built
-yet: the min/max mipmaps that skip empty cells, and a better structure than the plain grid for
-the software tracer. That is step 3.
+State after step 3: every tracer shows a voxel model. Every tracer runs the same brick test for
+each brick that its search structure gives it: the ray walks the primary grid of the brick and
+tests the filled voxels of each column (`shaders/common/brick2012.slang`). With a `_mip`
+encoding the walk first reads the min/max mipmap of the brick and skips every square of cells
+that the ray passes above or below. It finds the same hits, bit for bit. The software tracers
+walk a uniform grid, a sparse octree or a binary BVH of their own. The window shows what each
+ray does: work views, live averages, and the ray inspector, which lists every step of one ray.
 
 ## Building
 
@@ -90,13 +97,17 @@ build/src/app/Release/thesis_renderer.exe                                       
 build/src/app/Release/thesis_renderer.exe --model ../Models/lucy-2048.voxels    # a voxel model
 build/src/app/Release/thesis_renderer.exe --benchmark --model ../Models/lucy-2048.voxels --encoding brick2012_split
 build/src/app/Release/thesis_renderer.exe --model ../Models/lucy-2048.voxels --screenshot lucy.png --camera 90 10 0.75
+build/src/app/Release/thesis_renderer.exe --model ../Models/lucy-2048.voxels --encoding brick2012_inline_mip --tracer software_octree --screenshot ray.png --inspect 960 540
 build/src/app/Release/thesis_renderer.exe --help
 ```
 
-In the window: drag to orbit, scroll to zoom, **Tab** switches the tracer, **E** switches the
-encoding, **1-9** switch the view. The panel shows the size of every buffer of the current
-encoding and the bits per voxel. Switching the encoding encodes the model again and rebuilds
-the search structures, so the numbers in the panel always belong to what is on screen.
+In the window: drag to orbit, scroll to zoom. **Tab** switches the tracer, **E** the encoding,
+**B** the brick size (with Shift: the one before), **1-9, 0, -, =** the view. **M** measures
+every tracer at the current camera ("Measure all"), **R** resets the camera. A **right click**
+on the image starts the ray inspector on that pixel, **Esc** stops it. The panel shows the size
+of every buffer of the current encoding and the bits per voxel. Switching the encoding or the
+brick size encodes the model again and rebuilds the search structures, so the numbers in the
+panel always belong to what is on screen.
 
 | Key | View |
 |---|---|
@@ -107,25 +118,55 @@ the search structures, so the numbers in the panel always belong to what is on s
 | 5 | Lit with the face of the voxel cube: shows the voxels |
 | 6, 7, 8 | Work of each ray: cells visited, primitives tested, runs tested |
 | 9 | Kind of the cell at the hit: green one voxel, blue one run, red several runs |
+| 0 | Steps through the tracer's own search structure (the hardware tracer cannot count them) |
+| - | Mipmap cells read |
+| = | The largest mipmap square that the walk skipped: blue 2x2 cells, green 4x4, yellow 8x8, orange 16x16, red 32x32 |
 
-The views 6 to 9 run the counting variant of the tracer's shader (see below), which is slower.
-The trace time in the panel is then not the time of the tracer.
+The views 6 to = and the ray inspector run the counting variant of the tracer's shader (see
+below), which is slower. The trace time in the panel is then not the time of the tracer. With a
+work view on, the panel also shows the average work of a ray in the frame, about once a second.
+
+The **ray inspector** lists every step of one ray in order: the cells or nodes of the search
+structure, the primitives it was tested against, and inside each brick the mipmap squares (with
+their lowest and highest voxel, and whether the ray skipped them), the cells and the runs, then
+the hit. "Copy as text" puts the list on the clipboard. The hardware tracer cannot report the
+nodes of its BVH, so its list starts at the primitives.
 
 `--benchmark` is headless and writes `results/<time>_<tracer>[_<encoding>].json`.
-`--screenshot <file.png>` is headless too: it writes one frame, with `--view <1-9>`.
+`--screenshot <file.png>` is headless too: it writes one frame, with `--view <1-12>`. With
+`--inspect <x> <y>` it also prints every step of the ray of that pixel. In the window,
+`--inspect` starts the ray inspector on that pixel. `--brick-size 8|16|32` regroups the voxels
+into bricks of that size before the encoding.
 `--camera <yaw> <pitch> <factor>` sets the camera at the start: two angles in degrees, and the
 distance as a factor of the distance that shows the whole scene. For the benchmark it is the
 start and the radius of the orbit.
-`--list-tracers` and `--list-encodings` print what is built in.
+`--list-tracers` and `--list-encodings` print what is built in. `--self-test` uses every
+control of the window once and closes it (a smoke test of the window).
+
+### Many runs at once
+
+`scripts/run_benchmarks.py` runs the benchmark for every case of a plan file (models, encodings,
+brick sizes, camera orbits; `scripts/ablation_step3.json` is the plan of step 3). It runs a tracer
+again when the spread between its repeats is above 3 %, and writes `table.md` and `table.csv`
+from the results files. Every number in the table comes from a results file.
+
+```bash
+python scripts/run_benchmarks.py scripts/ablation_step3.json
+python scripts/run_benchmarks.py --table-only results/<folder>
+```
 
 ## Work counters
 
 Every tracer shader is compiled twice. The timed variant is the one that the benchmark times.
 The counting variant (`<shader>.counting.spv`, compiled with `THESIS_COUNT_WORK`) finds the same
-hits and also writes, for each ray, how many primitives it was tested against, how many cells of
-primary grids it visited, how many runs it was tested against, and the kind of the cell with the
-hit. In the timed variant the counter struct is empty, so counting costs it nothing
-(`shaders/common/work.slang`). After the timed repeats of each tracer the benchmark runs the
+hits and also writes, for each ray, how many primitives it was tested against, how many steps it
+took through the tracer's own search structure, how many cells of primary grids and mipmap cells
+it visited (and how many mipmap squares it skipped, and at which levels), how many runs it was
+tested against, and the kind of the cell with the hit. For one ray that the caller names, it also
+writes every step to the ray log (`shared/include/thesis/shared/RayLog.h`, at most 4,095 steps).
+In the timed variant the counter struct is empty, so counting costs it nothing
+(`shaders/common/work.slang`). A test checks that the ray log of a ray agrees with its counters
+and ends with its hit. After the timed repeats of each tracer the benchmark runs the
 counting variant from 8 points of the orbit and adds the result to the results file as
 `summary.ray_work`.
 
@@ -136,9 +177,12 @@ Live profiling: start the [Tracy](https://github.com/wolfpld/tracy/releases) pro
 
 The benchmark follows a fixed protocol so numbers can be compared across days:
 
-1. Warm-up runs for at least `--warmup` seconds (default 3) and until the GPU clock has
-   settled, at most `--warmup-max` seconds (default 20). The table's "settled" column says
-   whether it did; the system state is captured after warm-up.
+1. Warm-up runs for at least `--warmup` seconds (default 10), until the GPU clock is stable
+   and the trace times of the last 3 orbits agree within 2 %, at most `--warmup-max` seconds
+   (default 30). The table's "settled" column says whether it did; the system state is captured
+   after warm-up. The minimum of 10 s is there because the driver runs a new shader slower for
+   about its first 5 seconds (up to 1.8 times for the grid tracer), at a steady speed that a
+   test for "stable" cannot tell from the real one.
 2. Several repeats of one camera orbit; reported value = median of the repeat medians.
    The GPU clock is also recorded after each repeat.
 3. Each results file records GPU, driver, clocks, temperature, power draw and limit, charger
@@ -148,7 +192,7 @@ The benchmark follows a fixed protocol so numbers can be compared across days:
 5. Rays and hits pass through GPU memory. That costs every tracer the same; the `null` tracer
    measures exactly that floor, and the benchmark prints each tracer's time above it.
 6. Before a number is used, look at `spread_between_repeats_percent` in its results file. The
-   first repeats of the first tracer were slow on a large model in the first step 2 runs.
+   runner script runs a tracer again when the spread is above 3 %.
 
 For thesis numbers: plugged in, same Windows power mode, nothing else running.
 
@@ -163,15 +207,16 @@ For thesis numbers: plugged in, same Windows power mode, nothing else running.
 | `src/encodings/*` | One folder per encoding plugin (`brick2012`: both layouts) | encoding |
 | `src/gpu` | Thin Vulkan layer: device, buffers, kernels, timers | Vulkan, vk-bootstrap, VMA, Tracy |
 | `src/tracing` | The tracer socket: `ITracer`, ray and hit lists, GPU scene | core, gpu |
-| `src/tracers/*` | One folder per tracer plugin, with its shader (`software`: also its uniform grid) | tracing |
+| `src/tracers/*` | One folder per tracer plugin, with its shader and its search structure (`software_grid`, `software_octree`, `software_bvh`) | tracing |
 | `src/workloads` | Ray generators (camera rays) | tracing |
 | `src/resolve` | Hits → image | tracing |
 | `src/metrics` | Measurement output socket: Tracy plots, JSON results, system state | core |
-| `src/app` | Window, control panel, presenter, benchmark mode, frame pipeline, scene source | everything |
+| `src/app` | Window, control panel (with the ray inspector), presenter, benchmark mode, frame pipeline, scene source | everything |
 | `src/tools/model` | `thesis_model`: voxelize a mesh, report on the encodings | encodings, metrics |
-| `shared` | Headers read by both C++ and shaders (binding slots, brick bit layout, bits of a hit) | |
-| `shaders/common` | Shared GPU code: formats (`types.slang`), box test (`aabb.slang`), the brick test of the 2012 format (`brick2012.slang`), the closest hit of a ray (`closest.slang`), work counters (`work.slang`), packed normals (`normals.slang`) | |
-| `shaders/primitives/<kind>` | What is inside a primitive's box: `box`, `brick2012_inline`, `brick2012_split` | |
+| `shared` | Headers read by both C++ and shaders (binding slots, brick bit layout, bits of a hit, octree and BVH nodes, the ray log) | |
+| `shaders/common` | Shared GPU code: formats (`types.slang`), box test (`aabb.slang`), the brick test of the 2012 format (`brick2012.slang`), the two bit layouts (`brick2012_inline.slang`, `brick2012_split.slang`), the stored mipmap (`brick2012_mipmap.slang`), the closest hit of a ray (`closest.slang`), work counters and ray log (`work.slang`), packed normals (`normals.slang`) | |
+| `shaders/primitives/<kind>` | What is inside a primitive's box: `box`, `brick2012_inline`, `brick2012_split`, `brick2012_inline_mip`, `brick2012_split_mip` | |
+| `scripts` | `run_benchmarks.py` and its plan files | |
 | `tests` | Unit tests, encoding round trips, the cross-tracer agreement test, the brick test against a CPU test of every voxel cube and against hand-computed rays | |
 
 Each library only sees the headers of libraries it links, so the dependency direction is

@@ -1,11 +1,15 @@
-// The brick format of Reichl et al. 2012 in two bit layouts:
+// The brick format of Reichl et al. 2012 in two bit layouts, each without and with the min/max
+// mipmap of the paper:
 //
-//   brick2012_inline  attributes next to the heights, as in the paper
-//   brick2012_split   attributes in their own buffer
+//   brick2012_inline      attributes next to the heights, as in the paper
+//   brick2012_split       attributes in their own buffer
+//   brick2012_inline_mip  the inline layout, and a min/max mipmap for each brick
+//   brick2012_split_mip   the split layout, and a min/max mipmap for each brick
 //
-// Both store the same columns and runs (see ColumnBrick.h); only the place of the normals
-// differs. Every bit is defined in shared/include/thesis/shared/Brick2012.h, which the brick
-// shaders read as well (shaders/common/brick2012.slang and shaders/primitives/brick2012_*).
+// All store the same columns and runs (see ColumnBrick.h). The layouts differ only in the place
+// of the normals. The mipmap is one more buffer and changes nothing in the others. Every bit is
+// defined in shared/include/thesis/shared/Brick2012.h, which the brick shaders read as well
+// (shaders/common/brick2012*.slang and shaders/primitives/brick2012_*).
 
 #include "thesis/brick2012/BrickBuffers.h"
 #include "thesis/brick2012/ColumnBrick.h"
@@ -16,6 +20,7 @@
 #include <glm/common.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <cstring>
 #include <execution>
 #include <memory>
@@ -52,6 +57,7 @@ struct EncodedBrick {
     std::vector<std::uint32_t> cells; // one value per cell; written as 16 or 32 bits
     std::vector<std::uint16_t> indirection;
     std::vector<std::uint16_t> attributes; // split layout only
+    std::vector<std::uint16_t> mipmap;     // encodings with mipmap only
     ColumnStatistics statistics;
     const char* error = nullptr; // set instead of throwing: this runs inside a parallel loop
 };
@@ -124,6 +130,53 @@ void encodeSplit(const ColumnBrick& columns, EncodedBrick& out)
     out.attributes.insert(out.attributes.end(), pointerNormals.begin(), pointerNormals.end());
 }
 
+// Number of levels of the min/max mipmap of a brick with N = brickSize: log2(N) - 1.
+std::uint32_t mipmapLevelsOf(std::uint32_t brickSize)
+{
+    return static_cast<std::uint32_t>(std::countr_zero(brickSize)) - 1u;
+}
+
+std::uint16_t packMipmapCell(std::uint32_t lowest, std::uint32_t highest)
+{
+    return static_cast<std::uint16_t>(lowest | (highest << THESIS_MIP_HIGH_SHIFT));
+}
+
+// The min/max mipmap of one brick: for each square of 2^L x 2^L cells, the lowest and the
+// highest height of a filled voxel in its columns. Level 1 comes from the columns, each higher
+// level from the four cells below it.
+void encodeMipmap(const ColumnBrick& columns, EncodedBrick& out)
+{
+    const std::uint32_t n = columns.brickSize;
+    out.mipmap.assign(THESIS_MIP_CELLS_OF_BRICK(n), std::uint16_t{THESIS_MIP_EMPTY});
+
+    // Level 0 is not stored: the lowest and the highest filled voxel of each column.
+    std::vector<std::uint16_t> below(columns.cellCount(), std::uint16_t{THESIS_MIP_EMPTY});
+    for (std::uint32_t cell = 0; cell < columns.cellCount(); ++cell) {
+        const std::span<const Run> runs = columns.runs(cell);
+        if (!runs.empty()) {
+            below[cell] = packMipmapCell(runs.front().start, runs.back().start + runs.back().length - 1u);
+        }
+    }
+
+    for (std::uint32_t level = 1; level <= mipmapLevelsOf(n); ++level) {
+        const std::uint32_t side = n >> level;
+        const std::uint32_t start = THESIS_MIP_LEVEL_START(n, level);
+        for (std::uint32_t y = 0; y < side; ++y) {
+            for (std::uint32_t x = 0; x < side; ++x) {
+                std::uint32_t lowest = THESIS_MIP_LOW_MASK;
+                std::uint32_t highest = 0;
+                for (std::uint32_t child = 0; child < 4; ++child) {
+                    const std::uint16_t value = below[(2 * x + child % 2) + (2 * side) * (2 * y + child / 2)];
+                    lowest = std::min<std::uint32_t>(lowest, value & THESIS_MIP_LOW_MASK);
+                    highest = std::max<std::uint32_t>(highest, (value >> THESIS_MIP_HIGH_SHIFT) & THESIS_MIP_HIGH_MASK);
+                }
+                out.mipmap[start + x + side * y] = packMipmapCell(lowest, highest);
+            }
+        }
+        below.assign(out.mipmap.begin() + start, out.mipmap.begin() + start + side * side);
+    }
+}
+
 // The box around the filled voxels of a brick, in world space.
 core::Aabb boundsOf(const ColumnBrick& columns, const glm::uvec3& coordinate, const voxel::VoxelGrid& grid)
 {
@@ -178,11 +231,14 @@ T valueAt(const std::vector<std::byte>& bytes, std::uint64_t index)
 
 class Brick2012Encoding final : public encoding::IEncoding {
 public:
-    explicit Brick2012Encoding(Layout layout) : layout_(layout) {}
+    Brick2012Encoding(Layout layout, bool mipmap) : layout_(layout), mipmap_(mipmap) {}
 
     std::string_view name() const override
     {
-        return layout_ == Layout::Inline ? "brick2012_inline" : "brick2012_split";
+        if (layout_ == Layout::Inline) {
+            return mipmap_ ? "brick2012_inline_mip" : "brick2012_inline";
+        }
+        return mipmap_ ? "brick2012_split_mip" : "brick2012_split";
     }
 
     encoding::EncodedModel encode(const voxel::VoxelModel& model) const override
@@ -211,6 +267,9 @@ public:
             } else {
                 encodeSplit(columns, out);
             }
+            if (mipmap_) {
+                encodeMipmap(columns, out);
+            }
         });
 
         // 2. Join the bricks into the buffers and note where each brick starts.
@@ -235,6 +294,10 @@ public:
         std::vector<std::byte> cells(static_cast<std::size_t>(cellsPerBrick) * encoded.size() * cellBytes);
         std::vector<std::uint16_t> indirection;
         std::vector<std::uint16_t> attributes;
+        std::vector<std::uint16_t> mipmap; // the same number of cells for each brick, in brick order
+        if (mipmap_) {
+            mipmap.reserve(encoded.size() * THESIS_MIP_CELLS_OF_BRICK(n));
+        }
         table.reserve(encoded.size());
         indirection.reserve(static_cast<std::size_t>(indirectionWords));
         attributes.reserve(static_cast<std::size_t>(attributeWords));
@@ -268,6 +331,7 @@ public:
             }
             indirection.insert(indirection.end(), brick.indirection.begin(), brick.indirection.end());
             attributes.insert(attributes.end(), brick.attributes.begin(), brick.attributes.end());
+            mipmap.insert(mipmap.end(), brick.mipmap.begin(), brick.mipmap.end());
 
             scene.primitiveBounds.push_back(brick.bounds);
             scene.bounds.extend(brick.bounds);
@@ -280,7 +344,7 @@ public:
                                       n,
                                       static_cast<std::uint32_t>(encoded.size()),
                                       static_cast<std::uint32_t>(layout_),
-                                      0,
+                                      mipmap_ ? mipmapLevelsOf(n) : 0u,
                                       0};
         scene.primitiveData.push_back({THESIS_BINDING_BRICK_HEADER, "header", toBytes(&header, sizeof(header))});
         scene.primitiveData.push_back(
@@ -292,10 +356,15 @@ public:
             scene.primitiveData.push_back({THESIS_BINDING_BRICK_ATTRIBUTES, "attributes",
                                            toBytes(attributes.data(), attributes.size() * sizeof(std::uint16_t))});
         }
+        if (mipmap_) {
+            scene.primitiveData.push_back(
+                {THESIS_BINDING_BRICK_MIPMAP, "mipmap", toBytes(mipmap.data(), mipmap.size() * sizeof(std::uint16_t))});
+        }
 
         result.statistics = statistics.toJson();
         result.statistics["encoding"] = name();
         result.statistics["brick_size"] = n;
+        result.statistics["mipmap_levels"] = header.mipmapLevels;
         result.statistics["memory"] = encoding::memoryReport(scene).toJson(statistics.voxels);
         return result;
     }
@@ -310,7 +379,9 @@ public:
             layout_ == Layout::Split ? &bufferAt(scene, THESIS_BINDING_BRICK_ATTRIBUTES) : nullptr;
 
         const auto header = valueAt<BrickModelHeader>(headerBytes, 0);
-        if (header.layout != static_cast<std::uint32_t>(layout_) || !voxel::isSupportedBrickSize(header.brickSize)) {
+        // The mipmap is made from the columns, so decoding does not need it.
+        if (header.layout != static_cast<std::uint32_t>(layout_) || !voxel::isSupportedBrickSize(header.brickSize) ||
+            header.mipmapLevels != (mipmap_ ? mipmapLevelsOf(header.brickSize) : 0u)) {
             throw std::runtime_error(std::string(name()) + ": scene '" + scene.name + "' is not in this encoding");
         }
         const std::uint32_t n = header.brickSize;
@@ -449,6 +520,7 @@ private:
     }
 
     Layout layout_;
+    bool mipmap_;
 };
 
 } // namespace
@@ -459,9 +531,15 @@ namespace thesis::plugins {
 void registerBrick2012Encodings(encoding::EncodingRegistry& registry)
 {
     registry.add("brick2012_inline", "2012 brick format, attributes next to the heights (the order of the paper).",
-                 [] { return std::make_unique<brick2012::Brick2012Encoding>(brick2012::Layout::Inline); });
+                 [] { return std::make_unique<brick2012::Brick2012Encoding>(brick2012::Layout::Inline, false); });
     registry.add("brick2012_split", "2012 brick format, attributes in their own buffer.",
-                 [] { return std::make_unique<brick2012::Brick2012Encoding>(brick2012::Layout::Split); });
+                 [] { return std::make_unique<brick2012::Brick2012Encoding>(brick2012::Layout::Split, false); });
+    registry.add("brick2012_inline_mip",
+                 "The inline layout with a min/max mipmap in each brick: the brick test skips squares of cells.",
+                 [] { return std::make_unique<brick2012::Brick2012Encoding>(brick2012::Layout::Inline, true); });
+    registry.add("brick2012_split_mip",
+                 "The split layout with a min/max mipmap in each brick: the brick test skips squares of cells.",
+                 [] { return std::make_unique<brick2012::Brick2012Encoding>(brick2012::Layout::Split, true); });
 }
 
 } // namespace thesis::plugins

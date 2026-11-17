@@ -12,6 +12,10 @@ add_executable(thesis_renderer
     Options.h
     Presenter.cpp
     Presenter.h
+    RayLogText.cpp
+    RayLogText.h
+    RayWorkSummary.cpp
+    RayWorkSummary.h
     SceneSetup.cpp
     SceneSetup.h
     Screenshot.cpp

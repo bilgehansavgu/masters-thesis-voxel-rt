@@ -229,12 +229,20 @@ nlohmann::json captureSystemState()
     state["time_utc"] = utcNow();
 #if defined(_WIN32)
     state["power"] = capturePower();
-    state["gpu"] = Nvml::instance().snapshot();
 #else
     state["power"] = {{"available", false}};
-    state["gpu"] = {{"available", false}};
 #endif
+    state["gpu"] = captureGpuState();
     return state;
+}
+
+nlohmann::json captureGpuState()
+{
+#if defined(_WIN32)
+    return Nvml::instance().snapshot();
+#else
+    return {{"available", false}};
+#endif
 }
 
 std::optional<std::uint32_t> currentGraphicsClockMhz()

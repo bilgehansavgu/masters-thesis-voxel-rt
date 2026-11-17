@@ -29,7 +29,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
         return;
 
     Ray ray = gRays[rayIndex];
-    ClosestHit closest = ClosestHit.none(ray);
+    ClosestHit closest = ClosestHit.none(ray, rayIndex);
 
     RayDesc desc;
     desc.Origin = ray.origin;

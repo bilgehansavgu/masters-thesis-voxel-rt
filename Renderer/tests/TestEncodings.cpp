@@ -3,14 +3,19 @@
 
 #include "VoxelTestHelpers.h"
 
+#include "thesis/brick2012/BrickBuffers.h"
 #include "thesis/brick2012/ColumnBrick.h"
 #include "thesis/encodings/BuiltInEncodings.h"
 #include "thesis/mesh/TriangleMesh.h"
+#include "thesis/shared/Bindings.h"
+#include "thesis/shared/Brick2012.h"
 #include "thesis/voxel/Voxelizer.h"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <string>
@@ -161,6 +166,82 @@ TEST_CASE("split layout refuses a brick with too many runs", "[encoding]")
 
     const auto inlineEncoder = registry.create("brick2012_inline");
     CHECK(voxel::sameVoxels(inlineEncoder->decode(inlineEncoder->encode(checkerboard).scene), checkerboard));
+}
+
+// The mipmap is checked against the columns directly: for every square of every level, the
+// lowest and the highest filled voxel of all columns of the square, found by a loop over them.
+TEST_CASE("the min/max mipmap holds the lowest and the highest voxel of each square", "[encoding][mipmap]")
+{
+    const encoding::EncodingRegistry registry = makeRegistry();
+    const std::vector<NamedModel> models = testModels();
+    const auto bytesAt = [](const core::Scene& scene, std::uint32_t binding) -> const std::vector<std::byte>* {
+        for (const core::PrimitiveData& data : scene.primitiveData) {
+            if (data.binding == binding) {
+                return &data.bytes;
+            }
+        }
+        return nullptr;
+    };
+
+    std::size_t encodingsWithMipmap = 0;
+    for (const std::string& name : registry.names()) {
+        const auto encoder = registry.create(name);
+        for (const NamedModel& input : models) {
+            INFO(name << " on " << input.name);
+            const core::Scene scene = encoder->encode(input.model).scene;
+            const std::vector<std::byte>* mipmap = bytesAt(scene, THESIS_BINDING_BRICK_MIPMAP);
+            brick2012::BrickModelHeader header;
+            std::memcpy(&header, bytesAt(scene, THESIS_BINDING_BRICK_HEADER)->data(), sizeof(header));
+            const std::uint32_t n = header.brickSize;
+            const bool hasMipmap = name.ends_with("_mip");
+            if (!hasMipmap) {
+                CHECK(mipmap == nullptr);
+                CHECK(header.mipmapLevels == 0);
+                continue;
+            }
+            REQUIRE(mipmap != nullptr);
+            REQUIRE((1u << (header.mipmapLevels + 1)) == n); // the last level has 2 x 2 cells
+            const std::size_t cellsOfBrick = THESIS_MIP_CELLS_OF_BRICK(n);
+            REQUIRE(mipmap->size() >= input.model.bricks.size() * cellsOfBrick * sizeof(std::uint16_t));
+            const std::vector<std::byte>& table = *bytesAt(scene, THESIS_BINDING_BRICK_TABLE);
+
+            std::size_t wrong = 0;
+            std::size_t cellsWithVoxels = 0;
+            for (std::size_t b = 0; b < input.model.bricks.size(); ++b) {
+                brick2012::BrickRecord record;
+                std::memcpy(&record, table.data() + b * sizeof(record), sizeof(record));
+                const brick2012::ColumnBrick columns =
+                    brick2012::toColumns(input.model.bricks[b], n, record.position >> THESIS_BRICK_AXIS_SHIFT);
+                for (std::uint32_t level = 1; level <= header.mipmapLevels; ++level) {
+                    const std::uint32_t side = n >> level;
+                    for (std::uint32_t y = 0; y < side; ++y) {
+                        for (std::uint32_t x = 0; x < side; ++x) {
+                            std::uint32_t lowest = 63;
+                            std::uint32_t highest = 0;
+                            for (std::uint32_t v = y << level; v < (y + 1) << level; ++v) {
+                                for (std::uint32_t u = x << level; u < (x + 1) << level; ++u) {
+                                    for (const brick2012::Run& run : columns.runs(u + n * v)) {
+                                        lowest = std::min<std::uint32_t>(lowest, run.start);
+                                        highest = std::max<std::uint32_t>(highest, run.start + run.length - 1u);
+                                    }
+                                }
+                            }
+                            std::uint16_t stored;
+                            const std::size_t index =
+                                b * cellsOfBrick + THESIS_MIP_LEVEL_START(n, level) + x + side * y;
+                            std::memcpy(&stored, mipmap->data() + index * sizeof(stored), sizeof(stored));
+                            wrong += stored != (lowest | (highest << THESIS_MIP_HIGH_SHIFT)) ? 1 : 0;
+                            cellsWithVoxels += lowest <= highest ? 1 : 0;
+                        }
+                    }
+                }
+            }
+            CHECK(wrong == 0);
+            CHECK(cellsWithVoxels > 0);
+            ++encodingsWithMipmap;
+        }
+    }
+    CHECK(encodingsWithMipmap == 2 * models.size());
 }
 
 TEST_CASE("columns along each axis give back the brick", "[encoding]")

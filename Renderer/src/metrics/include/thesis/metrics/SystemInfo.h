@@ -13,6 +13,9 @@ namespace thesis::metrics {
 // Fields that cannot be read are reported as unavailable rather than guessed.
 [[nodiscard]] nlohmann::json captureSystemState();
 
+// The "gpu" part of captureSystemState() alone: cheap enough to record after each repeat.
+[[nodiscard]] nlohmann::json captureGpuState();
+
 // The GPU's current graphics clock, if it can be read (NVIDIA only). Cheap enough to poll.
 [[nodiscard]] std::optional<std::uint32_t> currentGraphicsClockMhz();
 

@@ -4,6 +4,7 @@
 
 #include "thesis/mesh/TriangleMesh.h"
 #include "thesis/voxel/OctNormal.h"
+#include "thesis/voxel/Rebrick.h"
 #include "thesis/voxel/VoxelFile.h"
 #include "thesis/voxel/Voxelizer.h"
 
@@ -16,6 +17,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <queue>
 #include <string>
 #include <tuple>
@@ -207,6 +209,41 @@ TEST_CASE("the voxels do not depend on the brick size", "[voxel]")
         CHECK(with8 == with16);
         CHECK(with8 == with32);
     }
+}
+
+// One voxel file gives the model with every brick size: rebrick() regroups the voxels. The
+// voxels and their normals must stay the same, and the result must keep the rules of a model.
+TEST_CASE("regrouping into another brick size keeps every voxel and its normal", "[voxel]")
+{
+    // A sphere, and noise in a grid that is not a multiple of 32: 24 x 16 x 40 voxels.
+    std::vector<voxel::VoxelModel> models;
+    for (const std::uint32_t brickSize : {8u, 16u, 32u}) {
+        models.push_back(voxelizeSphere(64, brickSize, voxel::VoxelizationRule::Conservative));
+    }
+    models.push_back(tests::makeModel(8, {3, 2, 5}, [](const glm::uvec3& p) -> std::optional<std::uint16_t> {
+        const std::uint32_t h = (p.x * 73856093u) ^ (p.y * 19349663u) ^ (p.z * 83492791u);
+        return h % 5 == 0 ? std::optional<std::uint16_t>(static_cast<std::uint16_t>(h >> 8)) : std::nullopt;
+    }));
+
+    for (const voxel::VoxelModel& model : models) {
+        const std::vector<tests::GridVoxel> expected = tests::listVoxels(model);
+        for (const std::uint32_t brickSize : {8u, 16u, 32u}) {
+            INFO("from bricks of " << model.grid.brickSize << " to bricks of " << brickSize);
+            const voxel::VoxelModel regrouped = voxel::rebrick(model, brickSize);
+            regrouped.validate();
+            CHECK(regrouped.grid.brickSize == brickSize);
+            CHECK(regrouped.grid.origin == model.grid.origin);
+            CHECK(regrouped.grid.voxelSize == model.grid.voxelSize);
+            CHECK(regrouped.voxelCount() == model.voxelCount());
+            CHECK(tests::listVoxels(regrouped) == expected);
+
+            // Back to the first brick size: the same bricks, bit for bit.
+            const voxel::VoxelModel back = voxel::rebrick(regrouped, model.grid.brickSize);
+            back.validate();
+            CHECK(back.bricks == model.bricks);
+        }
+    }
+    CHECK_THROWS(voxel::rebrick(models.front(), 12));
 }
 
 TEST_CASE("conservative voxelization contains the sampled one", "[voxel]")

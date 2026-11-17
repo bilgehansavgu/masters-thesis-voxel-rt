@@ -23,6 +23,14 @@ struct KernelDescription {
     std::uint32_t pushConstantSize = 0;
 };
 
+// One number that the driver reports about a compiled shader, for example "Register Count".
+// The names and their meaning come from the driver (VK_KHR_pipeline_executable_properties).
+struct ShaderStatistic {
+    std::string name;
+    std::string description;
+    double value = 0.0;
+};
+
 // The resources for one dispatch. Bound with push descriptors: recorded straight into the
 // command buffer, so there are no descriptor pools and nothing that can go stale.
 class KernelResources {
@@ -68,14 +76,19 @@ public:
     }
 
     [[nodiscard]] const std::string& name() const { return name_; }
+    // What the driver made of the shader. Empty if the driver does not report it.
+    [[nodiscard]] const std::vector<ShaderStatistic>& statistics() const { return statistics_; }
 
 private:
+    void readStatistics();
+
     const Context& context_;
     std::string name_;
     std::uint32_t pushConstantSize_ = 0;
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
+    std::vector<ShaderStatistic> statistics_;
 };
 
 // Number of workgroups needed to cover `count` items with groups of `groupSize`.

@@ -1,6 +1,8 @@
 # Tracer plugins. To add one: create a folder with its C++ and shader, add_subdirectory() it
 # here, and call thesis_register_plugin(SOCKET TRACER ...) in its CMakeLists.txt.
-add_subdirectory(software)
+add_subdirectory(software_grid)
+add_subdirectory(software_octree)
+add_subdirectory(software_bvh)
 add_subdirectory(hardware)
 add_subdirectory(null)
 

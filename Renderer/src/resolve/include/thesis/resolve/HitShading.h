@@ -23,17 +23,23 @@ enum class ShadingMode : std::uint32_t {
     WorkPrimitives = 6, // primitives the ray was tested against
     WorkRuns = 7,       // runs the ray was tested against
     WorkHitCell = 8,    // kind of the cell with the hit (figure 7 of Reichl et al. 2012)
+    WorkStructure = 9,  // cells or nodes of the tracer's own search structure the ray read
+    WorkMipmap = 10,    // cells of the min/max mipmaps of the bricks the ray read
+    WorkSkipLevel = 11, // the largest mipmap square that the walk skipped: one colour for each level
 };
 
-inline constexpr std::array<const char*, 9> kShadingModeNames{"Shaded",
-                                                              "Distance",
-                                                              "Primitive id",
-                                                              "Stored normal",
-                                                              "Voxel faces",
-                                                              "Work: cells visited",
-                                                              "Work: primitives tested",
-                                                              "Work: runs tested",
-                                                              "Work: cell kind at the hit"};
+inline constexpr std::array<const char*, 12> kShadingModeNames{"Shaded",
+                                                               "Distance",
+                                                               "Primitive id",
+                                                               "Stored normal",
+                                                               "Voxel faces",
+                                                               "Work: cells visited",
+                                                               "Work: primitives tested",
+                                                               "Work: runs tested",
+                                                               "Work: cell kind at the hit",
+                                                               "Work: search structure steps",
+                                                               "Work: mipmap cells read",
+                                                               "Work: largest mipmap square skipped"};
 
 // True for the views that show the work counters.
 [[nodiscard]] constexpr bool showsWork(ShadingMode mode)

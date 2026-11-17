@@ -26,7 +26,8 @@ struct ShadeParams {
 struct ShadeWorkParams {
     std::uint32_t width;
     std::uint32_t height;
-    std::uint32_t mode; // 0 cells, 1 primitives, 2 runs, 3 kind of the cell at the hit
+    std::uint32_t mode; // 0 cells, 1 primitives, 2 runs, 3 kind of the cell at the hit, 4 structure steps, 5 mipmap
+                        // cells, 6 largest square skipped
     std::uint32_t pad0;
     float scale;
     float pad1;

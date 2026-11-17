@@ -19,7 +19,7 @@ include(ThesisShaders)
 # that implements the primitive contract (see shaders/primitives/box/primitive.slang).
 # An encoding (src/encodings/) has a kind of the same name.
 unset(THESIS_PRIMITIVE_KINDS CACHE)
-set(THESIS_PRIMITIVE_KINDS box brick2012_inline brick2012_split)
+set(THESIS_PRIMITIVE_KINDS box brick2012_inline brick2012_split brick2012_inline_mip brick2012_split_mip)
 
 find_package(Vulkan REQUIRED)
 find_package(vk-bootstrap CONFIG REQUIRED)

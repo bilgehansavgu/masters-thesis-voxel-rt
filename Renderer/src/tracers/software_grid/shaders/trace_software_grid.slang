@@ -1,15 +1,17 @@
-// Software tracer: our own search structure, a uniform grid, walked in a compute shader.
+// Grid tracer: our own search structure, a uniform grid, walked in a compute shader.
 //
 // A uniform grid is a 3D array of equal cells over the scene. Each cell lists the primitives
-// whose boxes touch it (built in UniformGrid.cpp). The ray walks the cells front to back with a
+// that belong to it (built in UniformGrid.cpp). The ray walks the cells front to back with a
 // 3D DDA and tests the primitives of each cell. A hit inside the current cell is the closest
 // hit, because every later cell is farther away.
 //
 // Compiled once per primitive kind; `primitive` resolves to shaders/primitives/<kind>/.
 
 import types;
+import aabb;
 import closest;
 #include "thesis/shared/Bindings.h"
+#include "thesis/shared/RayLog.h"
 
 struct TraceParams
 {
@@ -26,32 +28,9 @@ struct TraceParams
 [[vk::binding(THESIS_BINDING_RAYS, 0)]] StructuredBuffer<Ray> gRays;
 [[vk::binding(THESIS_BINDING_HITS, 0)]] RWStructuredBuffer<Hit> gHits;
 // One entry for each cell and one more: the list of cell c is gGridItems[gGridCells[c] .. gGridCells[c + 1]).
-[[vk::binding(THESIS_BINDING_SOFTWARE_GRID_CELLS, 0)]] StructuredBuffer<uint> gGridCells;
+[[vk::binding(THESIS_BINDING_GRID_CELLS, 0)]] StructuredBuffer<uint> gGridCells;
 // Primitive indices.
-[[vk::binding(THESIS_BINDING_SOFTWARE_GRID_ITEMS, 0)]] StructuredBuffer<uint> gGridItems;
-
-// The part of the ray inside the grid: from tEnter to tExit (slab test). False if there is none.
-bool clipToGrid(Ray ray, out float tEnter, out float tExit)
-{
-    const float3 lo = gParams.gridOrigin;
-    const float3 hi = lo + gParams.cellSize * float3(gParams.gridSize);
-    tEnter = ray.tMin;
-    tExit = ray.tMax;
-    for (uint axis = 0; axis < 3; ++axis)
-    {
-        if (ray.direction[axis] == 0.0)
-        {
-            if (ray.origin[axis] < lo[axis] || ray.origin[axis] > hi[axis])
-                return false;
-            continue;
-        }
-        const float tA = (lo[axis] - ray.origin[axis]) / ray.direction[axis];
-        const float tB = (hi[axis] - ray.origin[axis]) / ray.direction[axis];
-        tEnter = max(tEnter, min(tA, tB));
-        tExit = min(tExit, max(tA, tB));
-    }
-    return tEnter <= tExit;
-}
+[[vk::binding(THESIS_BINDING_GRID_ITEMS, 0)]] StructuredBuffer<uint> gGridItems;
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
@@ -62,11 +41,12 @@ void main(uint3 threadId : SV_DispatchThreadID)
         return;
 
     Ray ray = gRays[rayIndex];
-    ClosestHit closest = ClosestHit.none(ray);
+    ClosestHit closest = ClosestHit.none(ray, rayIndex);
 
     float tEnter;
     float tExit;
-    if (clipToGrid(ray, tEnter, tExit))
+    const float3 gridHi = gParams.gridOrigin + gParams.cellSize * float3(gParams.gridSize);
+    if (clipRayToBox(ray, gParams.gridOrigin, gridHi, tEnter, tExit))
     {
         // Set up the walk (Amanatides and Woo 1987).
         const int3 last = int3(gParams.gridSize) - 1;
@@ -89,6 +69,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
         const uint maxCells = gParams.gridSize.x + gParams.gridSize.y + gParams.gridSize.z;
         for (uint visited = 0; visited < maxCells; ++visited)
         {
+            closest.work.structureStep(THESIS_LOG_GRID_CELL, uint(cell.x), uint(cell.y), uint(cell.z), 0);
             const uint index = uint(cell.x) + gParams.gridSize.x * (uint(cell.y) + gParams.gridSize.y * uint(cell.z));
             const uint end = gGridCells[index + 1];
             for (uint item = gGridCells[index]; item < end; ++item)

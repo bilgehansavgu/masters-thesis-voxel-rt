@@ -11,6 +11,7 @@
 #include "thesis/encodings/BuiltInEncodings.h"
 #include "thesis/mesh/TriangleMesh.h"
 #include "thesis/shared/Hit.h"
+#include "thesis/shared/RayLog.h"
 #include "thesis/voxel/Voxelizer.h"
 
 #include <catch2/catch_approx.hpp>
@@ -18,6 +19,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -173,16 +175,22 @@ TEST_CASE("tracers find the voxel that a test of every voxel cube finds", "[gpu]
                 }
             }
 
-            // Every encoding stores the same voxels, so every encoding gives the same hits.
+            // Every encoding stores the same voxels, so every encoding gives the same hits. The walk
+            // computes the same distances with the same formulas in every encoding. Each encoding
+            // is still its own shader program, and the driver replaces a program by a faster one
+            // some seconds after its first use. The two programs can round differently in the last
+            // bit. A ray that runs almost along the face of a voxel turns that into a larger
+            // difference of its distance, or into a hit on the voxel next to it. Which rays it hits
+            // depends on how long the CPU work between the traces took (it shows in the Debug
+            // build, where the cube-by-cube test is slow). So the encodings are compared like the
+            // tracers are compared with the cube-by-cube answer: with the same tolerances.
             if (firstEncoding.empty()) {
                 firstEncoding = std::move(thisEncoding);
             } else {
                 for (std::size_t view = 0; view < input.viewpoints.size(); ++view) {
                     INFO(input.name << ": " << encodingName << " against " << encodings.names().front()
                                     << ", viewpoint " << view);
-                    const tests::HitComparison same =
-                        tests::compareHits(firstEncoding[view], thisEncoding[view], 1e-6f);
-                    CHECK(same.disagreements() + same.primitiveMismatch + same.attributeMismatch == 0);
+                    checkAgainst(firstEncoding[view], thisEncoding[view], true);
                 }
             }
         }
@@ -311,6 +319,13 @@ TEST_CASE("the counting variant finds the same hits and counts the work", "[gpu]
 
     const voxel::VoxelModel model = voxel::voxelize(mesh::makeSphere({0.0f, 0.0f, 0.0f}, 1.0f, 48),
                                                     {64, 16, voxel::VoxelizationRule::Conservative});
+    // The work of all rays of the first tracer, for each encoding.
+    struct TotalWork {
+        std::uint64_t cells = 0;
+        std::uint64_t mipmapCells = 0;
+        std::uint64_t runs = 0;
+    };
+    std::map<std::string, TotalWork> totals;
     for (const std::string& encodingName : encodings.names()) {
         const core::Scene scene = encodings.create(encodingName)->encode(model).scene;
         const tracing::GpuScene gpuScene = tracing::GpuScene::upload(context, scene);
@@ -347,6 +362,11 @@ TEST_CASE("the counting variant finds the same hits and counts the work", "[gpu]
                 if (work[ray].hitCell <= THESIS_HIT_CELL_SEVERAL_RUNS) {
                     ++cellKinds[work[ray].hitCell];
                 }
+                if (t == 0) {
+                    totals[encodingName].cells += work[ray].cells;
+                    totals[encodingName].mipmapCells += work[ray].mipmapCells;
+                    totals[encodingName].runs += work[ray].runs;
+                }
             }
             CHECK(wrong == 0);
             // The conservative sphere has columns with one voxel and columns with a run.
@@ -355,5 +375,120 @@ TEST_CASE("the counting variant finds the same hits and counts the work", "[gpu]
         }
     }
 
+    // The mipmap lets a ray skip cells: an encoding with mipmap reads mipmap cells and visits
+    // fewer cells and fewer runs than the same layout without it. It never visits more.
+    std::size_t withMipmap = 0;
+    for (const auto& [name, total] : totals) {
+        INFO(name);
+        if (!name.ends_with("_mip")) {
+            CHECK(total.mipmapCells == 0);
+            continue;
+        }
+        const TotalWork& plain = totals.at(name.substr(0, name.size() - 4));
+        CHECK(total.mipmapCells > 0);
+        CHECK(total.cells < plain.cells);
+        CHECK(total.runs <= plain.runs);
+        ++withMipmap;
+    }
+    CHECK(withMipmap == 2);
+
+    CHECK(gpu::validationMessageCount() == validationBefore);
+}
+
+// The ray inspector of the window shows the ray log: the steps of one ray. The log must tell the
+// same story as the work counters of that ray, and it must end with the hit that the ray found.
+TEST_CASE("the ray log of a ray agrees with its work counters and its hit", "[gpu][brick][work]")
+{
+    const gpu::Context context(tests::testContextOptions("Thesis ray log test"));
+    const std::uint64_t validationBefore = gpu::validationMessageCount();
+    const encoding::EncodingRegistry encodings = makeEncodings();
+    const workloads::CameraRays cameraRays(context, THESIS_DEFAULT_SHADER_DIR);
+    const tracing::RayBatch batch = tracing::RayBatch::create(context, 128, 96);
+
+    const voxel::VoxelModel model = voxel::voxelize(mesh::makeSphere({0.0f, 0.0f, 0.0f}, 1.0f, 48),
+                                                    {64, 16, voxel::VoxelizationRule::Conservative});
+    for (const std::string& encodingName : encodings.names()) {
+        const core::Scene scene = encodings.create(encodingName)->encode(model).scene;
+        const tracing::GpuScene gpuScene = tracing::GpuScene::upload(context, scene);
+        const tests::HitFindingTracers set = tests::makeHitFindingTracers(context, gpuScene);
+        const core::CameraFrame camera = tests::cameraFrame(scene.bounds, {35.0f, 30.0f, 0.7f}, 4.0f / 3.0f);
+        (void)tests::generateRays(context, cameraRays, camera, batch);
+
+        for (std::size_t t = 0; t < set.tracers.size(); ++t) {
+            // Without a ray to log, the log stays empty.
+            std::vector<core::RayWork> work;
+            tracing::RayLog log;
+            std::vector<core::Hit> hits =
+                tests::traceRaysCounting(context, *set.tracers[t], batch, work, tracing::kNoLoggedRay, &log);
+            CHECK(log.steps.empty());
+
+            // Rays to look at: the centre of the image, the ray with the most cells, and a ray at a corner.
+            std::uint32_t mostCells = 0;
+            for (std::uint32_t ray = 0; ray < work.size(); ++ray) {
+                if (work[ray].cells > work[mostCells].cells) {
+                    mostCells = ray;
+                }
+            }
+            for (const std::uint32_t ray : {batch.width * (batch.height / 2) + batch.width / 2, mostCells, 0u}) {
+                INFO(encodingName << ", tracer " << set.names[t] << ", ray " << ray);
+                hits = tests::traceRaysCounting(context, *set.tracers[t], batch, work, ray, &log);
+                REQUIRE(log.ray == ray);
+                CHECK(log.lostSteps == 0);
+                REQUIRE_FALSE(log.steps.empty());
+
+                core::RayWork fromLog{};
+                std::uint32_t lastCloserHit = core::kNoHit;
+                float lastCloserT = 0.0f;
+                for (const core::RayLogEntry& step : log.steps) {
+                    switch (step.kind) {
+                    case THESIS_LOG_GRID_CELL:
+                    case THESIS_LOG_OCTREE_NODE:
+                    case THESIS_LOG_BVH_NODE:
+                        ++fromLog.structureSteps;
+                        break;
+                    case THESIS_LOG_PRIMITIVE:
+                        ++fromLog.primitiveTests;
+                        break;
+                    case THESIS_LOG_CLOSER_HIT:
+                        lastCloserHit = step.a;
+                        lastCloserT = step.t;
+                        break;
+                    case THESIS_LOG_MIPMAP:
+                        ++fromLog.mipmapCells;
+                        if (step.f == 1) {
+                            ++fromLog.mipmapSkips;
+                            fromLog.skippedLevels |= 1u << step.a;
+                        }
+                        break;
+                    case THESIS_LOG_CELL:
+                        ++fromLog.cells;
+                        break;
+                    case THESIS_LOG_RUN:
+                        ++fromLog.runs;
+                        break;
+                    default:
+                        break;
+                    }
+                }
+                CHECK(fromLog.structureSteps == work[ray].structureSteps);
+                CHECK(fromLog.primitiveTests == work[ray].primitiveTests);
+                CHECK(fromLog.mipmapCells == work[ray].mipmapCells);
+                CHECK(fromLog.mipmapSkips == work[ray].mipmapSkips);
+                CHECK(fromLog.skippedLevels == work[ray].skippedLevels);
+                CHECK(fromLog.cells == work[ray].cells);
+                CHECK(fromLog.runs == work[ray].runs);
+
+                // The last step is the result, and it is the hit of the hit list.
+                const core::RayLogEntry& result = log.steps.back();
+                CHECK(result.kind == std::uint32_t{THESIS_LOG_RESULT});
+                CHECK(result.a == hits[ray].primitive);
+                CHECK(result.t == hits[ray].t);
+                if (hits[ray].primitive != core::kNoHit) {
+                    CHECK(lastCloserHit == hits[ray].primitive);
+                    CHECK(lastCloserT == hits[ray].t);
+                }
+            }
+        }
+    }
     CHECK(gpu::validationMessageCount() == validationBefore);
 }

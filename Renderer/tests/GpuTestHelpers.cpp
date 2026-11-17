@@ -71,11 +71,20 @@ std::vector<core::Hit> traceRays(const gpu::Context& context, tracing::ITracer& 
 }
 
 std::vector<core::Hit> traceRaysCounting(const gpu::Context& context, tracing::ITracer& tracer,
-                                         const tracing::RayBatch& batch, std::vector<core::RayWork>& work)
+                                         const tracing::RayBatch& batch, std::vector<core::RayWork>& work,
+                                         std::uint32_t loggedRay, tracing::RayLog* log)
 {
     const gpu::Buffer workBuffer(context, static_cast<VkDeviceSize>(batch.count()) * sizeof(core::RayWork),
                                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, gpu::MemoryUsage::DeviceLocal);
-    context.submitAndWait([&](VkCommandBuffer cmd) { tracer.traceCounting(cmd, batch, workBuffer); });
+    const tracing::RayLogBuffer logBuffer(context);
+    context.submitAndWait([&](VkCommandBuffer cmd) {
+        logBuffer.request(cmd, loggedRay);
+        tracer.traceCounting(cmd, batch, tracing::WorkOutput{workBuffer, logBuffer.buffer()});
+        logBuffer.copyBack(cmd);
+    });
+    if (log != nullptr) {
+        *log = logBuffer.read();
+    }
     work = download<core::RayWork>(context, workBuffer, batch.count());
     return download<core::Hit>(context, batch.hits, batch.count());
 }

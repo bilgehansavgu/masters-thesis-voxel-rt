@@ -10,8 +10,8 @@ add_executable(thesis_tests
     TestCore.cpp
     TestEncodings.cpp
     TestNormals.cpp
+    TestSearchStructures.cpp
     TestShaderLayouts.cpp
-    TestUniformGrid.cpp
     TestVoxel.cpp
     VoxelTestHelpers.cpp
     VoxelTestHelpers.h)
@@ -22,7 +22,9 @@ target_link_libraries(thesis_tests PRIVATE
     thesis::tracing
     thesis::workloads
     thesis::tracer_plugins
-    thesis::tracer_software
+    thesis::tracer_software_grid
+    thesis::tracer_software_octree
+    thesis::tracer_software_bvh
     thesis::mesh
     thesis::voxel
     thesis::encoding

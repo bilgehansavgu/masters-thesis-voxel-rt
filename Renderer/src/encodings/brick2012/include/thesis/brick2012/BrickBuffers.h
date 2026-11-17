@@ -16,8 +16,8 @@ struct BrickModelHeader {
     glm::uvec3 gridSize; // voxels along each axis
     std::uint32_t brickSize;
     std::uint32_t brickCount;
-    std::uint32_t layout; // THESIS_BRICK_LAYOUT_*
-    std::uint32_t reserved0;
+    std::uint32_t layout;       // THESIS_BRICK_LAYOUT_*
+    std::uint32_t mipmapLevels; // levels of the min/max mipmap of each brick; 0 = no mipmap
     std::uint32_t reserved1;
 };
 static_assert(sizeof(BrickModelHeader) == 48);

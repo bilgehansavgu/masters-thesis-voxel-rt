@@ -1,6 +1,7 @@
 #include "Screenshot.h"
 
 #include "FramePipeline.h"
+#include "RayLogText.h"
 #include "SceneSetup.h"
 
 #include "thesis/gpu/Context.h"
@@ -10,6 +11,7 @@
 #include <stb_image_write.h>
 
 #include <cstdio>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -23,8 +25,8 @@ int runScreenshot(const Options& options)
     contextOptions.validation = options.validation;
     const gpu::Context context(contextOptions);
 
-    const SceneSource source(options);
-    const BuiltScene built = source.build(source.initialEncoding());
+    SceneSource source(options);
+    const BuiltScene built = source.build();
     const tracing::GpuScene gpuScene = tracing::GpuScene::upload(context, built.scene);
     const tracing::TracerRegistry registry = makeTracerRegistry();
     const std::string tracerName =
@@ -38,12 +40,28 @@ int runScreenshot(const Options& options)
     shading.mode = static_cast<resolve::ShadingMode>(options.view - 1);
     shading.distanceFar = 2.0f * camera.distance;
 
+    const bool inspect = options.inspect.size() == 2;
+    if (inspect) {
+        if (options.inspect[0] >= options.width || options.inspect[1] >= options.height) {
+            throw std::invalid_argument("--inspect: the pixel is outside the frame");
+        }
+        if (!tracer->countsWork()) {
+            throw std::invalid_argument("--inspect: tracer '" + tracerName + "' does not count work");
+        }
+        pipeline.setLoggedRay(options.inspect[1] * options.width + options.inspect[0]);
+    }
+
     context.submitAndWait([&](VkCommandBuffer cmd) {
         pipeline.begin(cmd);
-        pipeline.trace(cmd, *tracer, camera.frame(pipeline.aspectRatio()), resolve::showsWork(shading.mode));
+        pipeline.trace(cmd, *tracer, camera.frame(pipeline.aspectRatio()), resolve::showsWork(shading.mode) || inspect);
         pipeline.shade(cmd, shading);
     });
     (void)pipeline.collectTimings();
+
+    if (const std::optional<tracing::RayLog> log = pipeline.rayLog()) {
+        std::printf("Steps of the ray of pixel (%u, %u), ray %u:\n%s", options.inspect[0], options.inspect[1], log->ray,
+                    rayLogAsText(describeRayLog(*log)).c_str());
+    }
 
     const std::vector<std::byte> pixels = gpu::downloadImage(context, pipeline.output());
     const std::string file = options.screenshot.string();

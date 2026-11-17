@@ -5,6 +5,7 @@
 #include "thesis/gpu/Context.h"
 #include "thesis/tracing/GpuScene.h"
 #include "thesis/tracing/RayBatch.h"
+#include "thesis/tracing/RayLog.h"
 #include "thesis/tracing/Tracer.h"
 #include "thesis/workloads/CameraRays.h"
 
@@ -38,10 +39,12 @@ struct HitFindingTracers {
 [[nodiscard]] std::vector<core::Hit> traceRays(const gpu::Context& context, tracing::ITracer& tracer,
                                                const tracing::RayBatch& batch);
 
-// The same with the counting variant of the tracer. `work` gets the work of each ray.
+// The same with the counting variant of the tracer. `work` gets the work of each ray. With
+// `log`, it gets the steps of ray `loggedRay` (the ray inspector of the window).
 [[nodiscard]] std::vector<core::Hit> traceRaysCounting(const gpu::Context& context, tracing::ITracer& tracer,
-                                                       const tracing::RayBatch& batch,
-                                                       std::vector<core::RayWork>& work);
+                                                       const tracing::RayBatch& batch, std::vector<core::RayWork>& work,
+                                                       std::uint32_t loggedRay = tracing::kNoLoggedRay,
+                                                       tracing::RayLog* log = nullptr);
 
 // Camera positions around a scene, as changes to the camera that shows the whole scene.
 struct Viewpoint {

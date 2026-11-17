@@ -1,6 +1,7 @@
 #include "Benchmark.h"
 
 #include "FramePipeline.h"
+#include "RayWorkSummary.h"
 #include "SceneSetup.h"
 
 #include "thesis/core/GpuTypes.h"
@@ -65,7 +66,7 @@ double stageTime(const std::vector<gpu::StageTiming>& timings, std::string_view 
 }
 
 // The work of the rays of one tracer, added up over kWorkViews views of the benchmark orbit:
-// how many primitives, cells and runs a ray was tested against. It runs the counting variant
+// how many primitives, cells, mipmap cells and runs a ray was tested against. It runs the counting variant
 // of the tracer's shader. That variant is slower, so this happens after the timed repeats and
 // takes no part in them.
 nlohmann::json measureRayWork(const gpu::Context& context, FramePipeline& pipeline, tracing::ITracer& tracer,
@@ -76,14 +77,7 @@ nlohmann::json measureRayWork(const gpu::Context& context, FramePipeline& pipeli
     std::vector<core::RayWork> work(count);
     std::vector<core::Hit> hits(count);
 
-    std::uint64_t rays = 0;
-    std::uint64_t raysWithHit = 0;
-    core::RayWork most{};
-    // Sums over all rays [0] and over the rays with a hit [1].
-    std::array<std::uint64_t, 2> primitiveTests{};
-    std::array<std::uint64_t, 2> cells{};
-    std::array<std::uint64_t, 2> runs{};
-    std::array<std::uint64_t, 4> hitCells{};
+    RayWorkSummary summary;
     for (std::uint32_t view = 0; view < kWorkViews; ++view) {
         const core::CameraFrame camera = cameraAt(baseCamera, view, kWorkViews, pipeline.aspectRatio());
         context.submitAndWait([&](VkCommandBuffer cmd) {
@@ -95,43 +89,24 @@ nlohmann::json measureRayWork(const gpu::Context& context, FramePipeline& pipeli
         const std::vector<std::byte> hitBytes = gpu::downloadBuffer(context, pipeline.batch().hits);
         std::memcpy(work.data(), workBytes.data(), count * sizeof(core::RayWork));
         std::memcpy(hits.data(), hitBytes.data(), count * sizeof(core::Hit));
-
-        for (std::size_t ray = 0; ray < count; ++ray) {
-            const bool hit = hits[ray].primitive != core::kNoHit;
-            for (std::size_t group = 0; group < (hit ? 2u : 1u); ++group) {
-                primitiveTests[group] += work[ray].primitiveTests;
-                cells[group] += work[ray].cells;
-                runs[group] += work[ray].runs;
-            }
-            most.primitiveTests = std::max(most.primitiveTests, work[ray].primitiveTests);
-            most.cells = std::max(most.cells, work[ray].cells);
-            most.runs = std::max(most.runs, work[ray].runs);
-            raysWithHit += hit ? 1 : 0;
-            ++hitCells[std::min<std::uint32_t>(work[ray].hitCell, THESIS_HIT_CELL_SEVERAL_RUNS)];
-        }
-        rays += count;
+        summary.add(work, hits);
     }
 
-    const auto mean = [&](const std::array<std::uint64_t, 2>& sums, std::size_t group) {
-        const std::uint64_t count = group == 0 ? rays : raysWithHit;
-        return count == 0 ? 0.0 : static_cast<double>(sums[group]) / static_cast<double>(count);
-    };
-    const auto means = [&](std::size_t group) {
-        return nlohmann::json{{"primitive_tests", mean(primitiveTests, group)},
-                              {"cells", mean(cells, group)},
-                              {"runs", mean(runs, group)}};
-    };
-    return {{"note", "from the counting variant of the shader, not timed"},
-            {"views", kWorkViews},
-            {"rays", rays},
-            {"rays_with_hit", raysWithHit},
-            {"mean_per_ray", means(0)},
-            {"mean_per_ray_with_hit", means(1)},
-            {"max_per_ray", {{"primitive_tests", most.primitiveTests}, {"cells", most.cells}, {"runs", most.runs}}},
-            {"hits_by_cell_kind",
-             {{"height", hitCells[THESIS_HIT_CELL_HEIGHT]},
-              {"one_run", hitCells[THESIS_HIT_CELL_ONE_RUN]},
-              {"several_runs", hitCells[THESIS_HIT_CELL_SEVERAL_RUNS]}}}};
+    nlohmann::json result = summary.toJson();
+    result["note"] = "from the counting variant of the shader, not timed";
+    result["views"] = kWorkViews;
+    return result;
+}
+
+// What the driver made of the timed shader: register count, instruction count and so on. The
+// names come from the driver, so they are written as they are.
+nlohmann::json shaderStatisticsJson(const std::vector<gpu::ShaderStatistic>& statistics)
+{
+    nlohmann::json result = nlohmann::json::object();
+    for (const gpu::ShaderStatistic& statistic : statistics) {
+        result[statistic.name] = statistic.value;
+    }
+    return result;
 }
 
 struct WarmupResult {
@@ -139,12 +114,33 @@ struct WarmupResult {
     std::uint32_t frames = 0;
     bool clockStable = false;
     std::optional<std::uint32_t> clockMhz;
+    bool traceStable = false;
+    std::vector<double> orbitMedians; // median trace time of each whole orbit of the warm-up, in order
 };
 
-// Renders until at least `minSeconds` have passed and the GPU clock has settled (kStableReadings
-// readings, kSamplePeriod apart, each within 1 % of the previous), or until `maxSeconds`.
-// A fixed time, not a frame count: 60 frames are seconds for a slow tracer but milliseconds for
-// a fast one, far too short for a laptop GPU to reach its working clock.
+// True when the last kStableOrbits orbits of the warm-up took the same time, within kStableSpread.
+bool lastOrbitsAgree(const std::vector<double>& orbitMedians)
+{
+    constexpr std::size_t kStableOrbits = 3;
+    constexpr double kStableSpread = 0.02;
+    if (orbitMedians.size() < kStableOrbits) {
+        return false;
+    }
+    const auto [lowest, highest] = std::minmax_element(orbitMedians.end() - kStableOrbits, orbitMedians.end());
+    return *lowest > 0.0 && (*highest - *lowest) <= kStableSpread * *lowest;
+}
+
+// Renders orbits until three things hold, or until `maxSeconds`:
+//
+//   1. At least `minSeconds` have passed. A fixed time, not a frame count: 60 frames are seconds
+//      for a slow tracer but milliseconds for a fast one. The time must cover the first seconds
+//      of a shader: the driver runs a new shader slower for about 5 seconds after its first use,
+//      at a steady speed, so a test of the trace time alone does not see that phase.
+//   2. The GPU clock has settled (kStableReadings readings, kSamplePeriod apart, each within
+//      1 % of the previous). An idle laptop GPU runs at a few hundred MHz.
+//   3. The trace time has settled: the last three orbits took the same time within 2 %.
+//
+// The warm-up ends at the end of an orbit, so the repeats start where an orbit starts.
 template <typename RenderFrame>
 WarmupResult warmUp(RenderFrame&& renderFrame, std::uint32_t framesPerOrbit, double minSeconds, double maxSeconds)
 {
@@ -156,11 +152,19 @@ WarmupResult warmUp(RenderFrame&& renderFrame, std::uint32_t framesPerOrbit, dou
     Clock::time_point nextSample = start;
     std::optional<std::uint32_t> lastClock;
     std::uint32_t stableReadings = 0;
+    std::vector<double> orbit; // trace times of the orbit that is running
+    orbit.reserve(framesPerOrbit);
     WarmupResult result;
 
     while (true) {
-        (void)renderFrame(result.frames % framesPerOrbit);
+        orbit.push_back(stageTime(renderFrame(result.frames % framesPerOrbit), kStageTrace));
         ++result.frames;
+        const bool orbitDone = orbit.size() == framesPerOrbit;
+        if (orbitDone) {
+            result.orbitMedians.push_back(core::median(orbit));
+            result.traceStable = lastOrbitsAgree(result.orbitMedians);
+            orbit.clear();
+        }
 
         const Clock::time_point now = Clock::now();
         if (now >= nextSample) {
@@ -176,8 +180,9 @@ WarmupResult warmUp(RenderFrame&& renderFrame, std::uint32_t framesPerOrbit, dou
         result.seconds = std::chrono::duration<double>(now - start).count();
         result.clockMhz = lastClock;
         result.clockStable = lastClock.has_value() && stableReadings >= kStableReadings;
-        const bool settled = result.clockStable || !lastClock.has_value(); // unreadable clock: time only
-        if ((result.seconds >= minSeconds && settled) || result.seconds >= maxSeconds) {
+        const bool clockSettled = result.clockStable || !lastClock.has_value(); // unreadable clock: not waited for
+        if ((result.seconds >= minSeconds && clockSettled && result.traceStable && orbitDone) ||
+            result.seconds >= maxSeconds) {
             return result;
         }
     }
@@ -195,8 +200,8 @@ int runBenchmark(const Options& options)
         std::printf("note: validation is on, timings are not representative\n");
     }
 
-    const SceneSource source(options);
-    const BuiltScene built = source.build(source.initialEncoding());
+    SceneSource source(options);
+    const BuiltScene built = source.build();
     const core::Scene& scene = built.scene;
     const tracing::GpuScene gpuScene = tracing::GpuScene::upload(context, scene);
     const tracing::TracerRegistry registry = makeTracerRegistry();
@@ -216,12 +221,13 @@ int runBenchmark(const Options& options)
                     static_cast<double>(built.memory.totalBytes) / (1024.0 * 1024.0),
                     built.memory.bitsPerVoxel(built.voxels), built.details.c_str());
     }
-    std::printf("Protocol: warm-up %.0f-%.0f s until the GPU clock settles, then %u repeats x %u frames\n",
+    std::printf("Protocol: warm-up %.0f-%.0f s until the GPU clock and the trace time settle, then %u repeats x %u "
+                "frames\n",
                 options.warmupSeconds, options.warmupMaxSeconds, options.repeats, options.frames);
     std::printf("Camera: orbit from yaw %.0f, pitch %.0f, at %.2f x the distance that shows the whole scene\n\n",
                 options.camera.at(0), options.camera.at(1), options.camera.at(2));
-    std::printf("%-10s %10s %10s %10s %10s %10s %8s\n", "tracer", "median ms", "min ms", "max ms", "Mrays/s",
-                "clock MHz", "settled");
+    std::printf("%-16s %10s %10s %10s %8s %10s %10s %9s %8s\n", "tracer", "median ms", "min ms", "max ms", "spread %",
+                "Mrays/s", "clock MHz", "warm-up s", "settled");
 
     // Medians of tracers that find hits, and the fastest baseline (null tracer), for the summary.
     std::vector<std::pair<std::string, double>> tracerMedians;
@@ -241,7 +247,7 @@ int runBenchmark(const Options& options)
             if (!options.tracers.empty()) {
                 throw; // the user asked for this tracer by name
             }
-            std::printf("%-10s skipped: %s\n", tracerName.c_str(), reason.what());
+            std::printf("%-16s skipped: %s\n", tracerName.c_str(), reason.what());
             continue;
         }
 
@@ -255,6 +261,7 @@ int runBenchmark(const Options& options)
                         {"primitives", gpuScene.primitiveCount},
                         {"details", built.details},
                         {"encoding", built.encoding},
+                        {"brick_size", built.brickSize},
                         {"voxels", built.voxels},
                         {"encode_seconds", built.encodeSeconds},
                         {"memory", built.memory.toJson(built.voxels)},
@@ -275,7 +282,8 @@ int runBenchmark(const Options& options)
         run["prepare"] = {{"gpu_ms", prepared.gpuMilliseconds},
                           {"cpu_ms", prepared.cpuMilliseconds},
                           {"memory_bytes", prepared.memoryBytes},
-                          {"scratch_bytes", prepared.scratchBytes}};
+                          {"scratch_bytes", prepared.scratchBytes},
+                          {"shader_statistics", shaderStatisticsJson(prepared.shaderStatistics)}};
         run["memory_bytes"] = {{"scene", gpuScene.memoryBytes()},
                                {"tracer", tracer->memoryBytes()},
                                {"rays_and_hits", pipeline.batch().memoryBytes()},
@@ -298,7 +306,9 @@ int runBenchmark(const Options& options)
         run["warmup"] = {{"seconds", warmup.seconds},
                          {"frames", warmup.frames},
                          {"clock_settled", warmup.clockStable},
-                         {"graphics_clock_mhz", warmup.clockMhz ? nlohmann::json(*warmup.clockMhz) : nlohmann::json()}};
+                         {"graphics_clock_mhz", warmup.clockMhz ? nlohmann::json(*warmup.clockMhz) : nlohmann::json()},
+                         {"trace_settled", warmup.traceStable},
+                         {"trace_ms_median_of_each_orbit", warmup.orbitMedians}};
         run["system_after_warmup"] = metrics::captureSystemState();
 
         metrics::TracySink tracySink;
@@ -311,6 +321,7 @@ int runBenchmark(const Options& options)
         std::vector<double> allTraceMs;
         std::vector<double> repeatMedians;
         nlohmann::json repeatClocks = nlohmann::json::array();
+        nlohmann::json repeatGpuStates = nlohmann::json::array();
         for (std::uint32_t repeat = 0; repeat < options.repeats; ++repeat) {
             std::vector<double> traceMs;
             for (std::uint32_t frame = 0; frame < options.frames; ++frame) {
@@ -325,6 +336,7 @@ int runBenchmark(const Options& options)
             repeatMedians.push_back(core::median(traceMs));
             const std::optional<std::uint32_t> clock = metrics::currentGraphicsClockMhz();
             repeatClocks.push_back(clock ? nlohmann::json(*clock) : nlohmann::json());
+            repeatGpuStates.push_back(metrics::captureGpuState());
             allTraceMs.insert(allTraceMs.end(), traceMs.begin(), traceMs.end());
         }
 
@@ -333,19 +345,20 @@ int runBenchmark(const Options& options)
         const double medianMs = repeats.median;
         const double megaRaysPerSecond = medianMs > 0.0 ? static_cast<double>(rayCount) / (medianMs * 1e3) : 0.0;
 
+        const double spreadPercent = medianMs > 0.0 ? 100.0 * (repeats.max - repeats.min) / medianMs : 0.0;
         nlohmann::json summary;
-        summary["trace_ms"] = {
-            {"median_of_repeat_medians", medianMs},
-            {"repeat_medians", repeatMedians},
-            {"spread_between_repeats_percent", medianMs > 0.0 ? 100.0 * (repeats.max - repeats.min) / medianMs : 0.0},
-            {"all_frames",
-             {{"median", frames.median},
-              {"mean", frames.mean},
-              {"min", frames.min},
-              {"max", frames.max},
-              {"stddev", frames.standardDeviation}}}};
+        summary["trace_ms"] = {{"median_of_repeat_medians", medianMs},
+                               {"repeat_medians", repeatMedians},
+                               {"spread_between_repeats_percent", spreadPercent},
+                               {"all_frames",
+                                {{"median", frames.median},
+                                 {"mean", frames.mean},
+                                 {"min", frames.min},
+                                 {"max", frames.max},
+                                 {"stddev", frames.standardDeviation}}}};
         summary["mrays_per_second"] = megaRaysPerSecond;
         summary["graphics_clock_mhz_after_each_repeat"] = repeatClocks;
+        summary["gpu_after_each_repeat"] = repeatGpuStates;
         summary["system_after"] = metrics::captureSystemState();
         if (tracer->countsWork()) {
             summary["ray_work"] = measureRayWork(context, pipeline, *tracer, baseCamera);
@@ -353,15 +366,24 @@ int runBenchmark(const Options& options)
         sinks.endRun(summary);
 
         const std::string clockText = warmup.clockMhz ? std::to_string(*warmup.clockMhz) : "n/a";
-        std::printf("%-10s %10.3f %10.3f %10.3f %10.1f %10s %8s\n", tracerName.c_str(), medianMs, frames.min,
-                    frames.max, megaRaysPerSecond, clockText.c_str(), warmup.clockStable ? "yes" : "NO");
+        // "settled" is about the warm-up: the GPU clock and the trace time were steady when it ended.
+        std::printf("%-16s %10.3f %10.3f %10.3f %8.1f %10.1f %10s %9.1f %8s\n", tracerName.c_str(), medianMs,
+                    frames.min, frames.max, spreadPercent, megaRaysPerSecond, clockText.c_str(), warmup.seconds,
+                    warmup.clockStable && warmup.traceStable ? "yes" : "NO");
         if (summary.contains("ray_work")) {
             const nlohmann::json& work = summary["ray_work"];
             const nlohmann::json& mean = work["mean_per_ray_with_hit"];
-            std::printf(
-                "           %.1f %% of the rays hit; a ray that hits: %.2f primitive tests, %.2f cells, %.2f runs\n",
-                100.0 * work["rays_with_hit"].get<double>() / work["rays"].get<double>(),
-                mean["primitive_tests"].get<double>(), mean["cells"].get<double>(), mean["runs"].get<double>());
+            std::printf("           %.1f %% of the rays hit; a ray that hits: %.2f structure steps, %.2f primitive "
+                        "tests, %.2f mipmap cells (%.2f skipped), %.2f cells, %.2f runs\n",
+                        100.0 * work["rays_with_hit"].get<double>() / work["rays"].get<double>(),
+                        mean["structure_steps"].get<double>(), mean["primitive_tests"].get<double>(),
+                        mean["mipmap_cells"].get<double>(), mean["mipmap_skips"].get<double>(),
+                        mean["cells"].get<double>(), mean["runs"].get<double>());
+        }
+        for (const gpu::ShaderStatistic& statistic : prepared.shaderStatistics) {
+            if (statistic.name == "Register Count") {
+                std::printf("           the timed shader uses %.0f registers per thread\n", statistic.value);
+            }
         }
         std::printf("           -> %s\n", fileSink.path().string().c_str());
 
@@ -376,7 +398,7 @@ int runBenchmark(const Options& options)
     if (floorMs && !tracerMedians.empty()) {
         std::printf("\nMemory-traffic floor (null tracer): %.3f ms. Time above it:\n", *floorMs);
         for (const auto& [name, median] : tracerMedians) {
-            std::printf("  %-10s %10.3f ms\n", name.c_str(), median - *floorMs);
+            std::printf("  %-16s %10.3f ms\n", name.c_str(), median - *floorMs);
         }
     }
 

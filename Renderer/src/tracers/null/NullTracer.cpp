@@ -37,7 +37,9 @@ public:
                                                {{tracing::kRayBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
                                                 {tracing::kHitBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}},
                                                sizeof(TraceParams)});
-        return {};
+        tracing::PrepareReport report;
+        report.shaderStatistics = kernel_->statistics();
+        return report;
     }
 
     void trace(VkCommandBuffer cmd, const tracing::RayBatch& batch) override

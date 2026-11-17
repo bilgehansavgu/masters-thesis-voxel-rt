@@ -4,6 +4,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -17,6 +18,10 @@ class StorageImage;
 namespace thesis::app {
 
 class Window;
+
+// Largest rectangle with the image's aspect ratio that fits in the window, centred: where the
+// picture of the frame is in the window. Corners [0] (inclusive) and [1] (exclusive), in pixels.
+[[nodiscard]] std::array<VkOffset3D, 2> letterbox(VkExtent2D image, VkExtent2D window);
 
 // Gets frames onto the window: the swapchain, the per-frame command buffer and the
 // synchronisation objects, with one frame in flight. Per frame:

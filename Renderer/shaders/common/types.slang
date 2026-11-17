@@ -28,6 +28,24 @@ public struct RayWork
     public uint cells;          // cells of primary grids the ray visited
     public uint runs;           // runs the ray was tested against
     public uint hitCell;        // kind of the cell with the hit: THESIS_HIT_CELL_* in thesis/shared/Hit.h
+    public uint structureSteps; // cells or nodes of the tracer's own search structure the ray read; 0 if not known
+    public uint mipmapCells;    // cells of the min/max mipmaps of the bricks the ray read; 0 without mipmap
+    public uint mipmapSkips;    // of those, the cells whose square the ray passed by, so the walk skipped it
+    public uint skippedLevels;  // bit L is set if the walk skipped a square of level L (2^L x 2^L cells)
+};
+
+// One step of the ray log, or its header (entry 0). The meaning of the fields depends on `kind`:
+// thesis/shared/RayLog.h.
+public struct RayLogEntry
+{
+    public uint  kind;
+    public uint  a;
+    public uint  b;
+    public uint  c;
+    public uint  d;
+    public uint  e;
+    public uint  f;
+    public float t;
 };
 
 // Six floats in a row, then padding: this is also the layout the GPU's search-structure builder

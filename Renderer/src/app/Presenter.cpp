@@ -13,9 +13,7 @@
 #include <utility>
 
 namespace thesis::app {
-namespace {
 
-// Largest rectangle with the image's aspect ratio that fits in the window, centred.
 std::array<VkOffset3D, 2> letterbox(VkExtent2D image, VkExtent2D window)
 {
     const float scale = std::min(static_cast<float>(window.width) / static_cast<float>(image.width),
@@ -26,8 +24,6 @@ std::array<VkOffset3D, 2> letterbox(VkExtent2D image, VkExtent2D window)
     const auto y = (static_cast<std::int32_t>(window.height) - height) / 2;
     return {VkOffset3D{x, y, 0}, VkOffset3D{x + width, y + height, 1}};
 }
-
-} // namespace
 
 Presenter::Presenter(const gpu::Context& context, Window& window)
     : context_(context), window_(window), swapchain_(context, window.framebufferExtent())

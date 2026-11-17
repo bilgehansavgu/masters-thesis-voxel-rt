@@ -69,6 +69,10 @@ public:
     // Records commands with `record`, submits them and blocks until the GPU has finished.
     void submitAndWait(const std::function<void(VkCommandBuffer)>& record) const;
 
+    // True if the driver reports what it made of each shader: registers, instructions
+    // (VK_KHR_pipeline_executable_properties). ComputeKernel::statistics() has the numbers.
+    [[nodiscard]] bool pipelineStatistics() const { return pipelineStatistics_; }
+
     // Bytes of device-local memory currently in use by this process (VK_EXT_memory_budget).
     [[nodiscard]] VkDeviceSize deviceLocalUsage() const;
 
@@ -85,6 +89,7 @@ private:
     VmaAllocator allocator_ = VK_NULL_HANDLE;
     DeviceInfo info_{};
     bool memoryBudget_ = false;
+    bool pipelineStatistics_ = false;
 
     VkCommandPool commandPool_ = VK_NULL_HANDLE;
     VkCommandBuffer commandBuffer_ = VK_NULL_HANDLE;

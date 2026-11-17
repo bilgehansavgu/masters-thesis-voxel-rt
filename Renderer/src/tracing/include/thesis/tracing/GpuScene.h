@@ -41,6 +41,10 @@ struct GpuScene {
 
     [[nodiscard]] static GpuScene upload(const gpu::Context& context, const core::Scene& scene);
 
+    // The boxes of the primitives, read back from the GPU (blocks). A tracer that builds its own
+    // search structure on the CPU starts from this list, as the GPU does for its BVH.
+    [[nodiscard]] std::vector<core::Aabb> downloadPrimitiveBounds(const gpu::Context& context) const;
+
     // Descriptor bindings the primitive kind's shader code reads (bounds plus its own data).
     [[nodiscard]] std::vector<gpu::KernelBinding> primitiveBindings() const;
     // Attaches those buffers to a dispatch.

@@ -2,6 +2,7 @@
 
 #include "thesis/tracing/Bindings.h"
 
+#include <cstring>
 #include <set>
 #include <span>
 #include <stdexcept>
@@ -43,6 +44,17 @@ GpuScene GpuScene::upload(const gpu::Context& context, const core::Scene& scene)
                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT)});
     }
     return result;
+}
+
+std::vector<core::Aabb> GpuScene::downloadPrimitiveBounds(const gpu::Context& context) const
+{
+    const std::vector<std::byte> bytes = gpu::downloadBuffer(context, primitiveBounds);
+    std::vector<core::Aabb> boxes(primitiveCount);
+    if (bytes.size() < boxes.size() * sizeof(core::Aabb)) {
+        throw std::logic_error("GpuScene: the bounds buffer is smaller than the primitive count");
+    }
+    std::memcpy(boxes.data(), bytes.data(), boxes.size() * sizeof(core::Aabb));
+    return boxes;
 }
 
 std::vector<gpu::KernelBinding> GpuScene::primitiveBindings() const

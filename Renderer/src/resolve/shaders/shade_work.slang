@@ -6,6 +6,7 @@ import display;
 #include "thesis/shared/Bindings.h"
 #include "thesis/shared/ColorScale.h"
 #include "thesis/shared/Hit.h"
+#include "thesis/shared/ViewColors.h"
 #include "thesis/shared/RayOrder.h"
 
 struct ShadeWorkParams
@@ -28,13 +29,14 @@ struct ShadeWorkParams
 [[vk::binding(THESIS_BINDING_SHADE_OUTPUT, 0)]] [[vk::image_format("rgba8")]] RWTexture2D<float4> gOutput;
 [[vk::binding(THESIS_BINDING_SHADE_WORK, 0)]] StructuredBuffer<RayWork> gWork;
 
-// One colour for each mipmap level 1 to 6 (squares of 2x2 to 64x64 cells). The panel names
-// them in the legend of the view (ControlPanel.cpp).
+// One colour for each mipmap level 1 to 6 (squares of 2x2 to 64x64 cells), from ViewColors.h.
+// resolve/ViewLegend.cpp names them in the legend of the view.
 float3 levelColor(uint level)
 {
-    const float3 colors[6] = {float3(0.20, 0.40, 0.95), float3(0.15, 0.75, 0.30), float3(0.95, 0.85, 0.10),
-                              float3(0.95, 0.45, 0.10), float3(0.85, 0.15, 0.15), float3(0.80, 0.30, 0.85)};
-    return colors[min(level, 6u) - 1];
+    const float3 colors[THESIS_MIPMAP_LEVELS] = {float3(THESIS_COLOR_LEVEL_1), float3(THESIS_COLOR_LEVEL_2),
+                                                 float3(THESIS_COLOR_LEVEL_3), float3(THESIS_COLOR_LEVEL_4),
+                                                 float3(THESIS_COLOR_LEVEL_5), float3(THESIS_COLOR_LEVEL_6)};
+    return colors[min(level, uint(THESIS_MIPMAP_LEVELS)) - 1];
 }
 
 // Viridis at t in [0, 1], display-encoded (sRGB). Same formula as viridis() in resolve/ColorScale.cpp.
@@ -69,7 +71,7 @@ float3 countColor(float count, float scale, uint kind)
         return float3(1.0, 1.0, 1.0);
     // WHY pow: the map is display-encoded and toDisplay() encodes once more. Decoding first makes
     // the stored value the viridis value, so the image matches the colour bar.
-    return pow(viridis(scalePosition(count, scale, kind)), 2.2);
+    return pow(viridis(scalePosition(count, scale, kind)), THESIS_DISPLAY_GAMMA);
 }
 
 [shader("compute")]
@@ -92,13 +94,13 @@ void main(uint3 threadId : SV_DispatchThreadID)
     {
         // The colours of figure 7 in Reichl et al. 2012.
         if (work.hitCell == THESIS_HIT_CELL_HEIGHT)
-            color = float3(0.15, 0.70, 0.20); // green: one voxel in the column
+            color = float3(THESIS_COLOR_HIT_HEIGHT);
         else if (work.hitCell == THESIS_HIT_CELL_ONE_RUN)
-            color = float3(0.15, 0.30, 0.90); // blue: one run of several voxels
+            color = float3(THESIS_COLOR_HIT_ONE_RUN);
         else if (work.hitCell == THESIS_HIT_CELL_SEVERAL_RUNS)
-            color = float3(0.90, 0.15, 0.10); // red: more than one run
+            color = float3(THESIS_COLOR_HIT_SEVERAL_RUNS);
         else if (gHits[index].primitive != kNoHit)
-            color = float3(0.5, 0.5, 0.5);    // a hit on a primitive kind without cells
+            color = float3(THESIS_COLOR_HIT_NO_CELLS);
         else
             color = backgroundColor(float(threadId.y) / float(gParams.height));
     }

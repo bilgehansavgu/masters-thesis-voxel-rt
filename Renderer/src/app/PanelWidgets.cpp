@@ -1,5 +1,7 @@
 #include "PanelWidgets.h"
 
+#include "thesis/resolve/LegendPainter.h"
+
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
@@ -27,15 +29,15 @@ constexpr ViewInfo kWorkViews[] = {
      "Primitives that the ray was tested against. For a voxel model: bricks."},
     {ShadingMode::WorkRuns, ImGuiKey_8, "8", "Runs tested", "Runs that the ray was tested against."},
     {ShadingMode::WorkHitCell, ImGuiKey_9, "9", "Cell kind at the hit",
-     "Kind of the cell with the hit. Green: one voxel. Blue: one run. Red: several runs."},
+     "Kind of the primary grid cell with the hit, as in figure 7 of Reichl et al. 2012. The legend on the image "
+     "names the colours."},
     {ShadingMode::WorkStructure, ImGuiKey_0, "0", "Search structure steps",
      "Cells or nodes of the tracer's own search structure that the ray read. The hardware tracer cannot count them."},
     {ShadingMode::WorkMipmap, ImGuiKey_Minus, "-", "Mipmap cells read",
      "Cells of the min/max mipmaps that the ray read. Zero for an encoding without mipmap."},
     {ShadingMode::WorkSkipLevel, ImGuiKey_Equal, "=", "Largest mipmap square skipped",
      "The largest square of the min/max mipmap that the walk skipped for this ray, because the ray passes above or "
-     "below every voxel in it. Blue: 2x2 cells, green: 4x4, yellow: 8x8, orange: 16x16, red: 32x32. Black: no "
-     "square skipped, or the encoding has no mipmap."},
+     "below every voxel in it. The legend on the image names the colours."},
 };
 
 static_assert(std::size(kImageViews) + std::size(kWorkViews) == resolve::kShadingModeNames.size());
@@ -120,71 +122,73 @@ void rowLabel(const char* label)
     ImGui::SameLine(ImGui::GetFontSize() * 6.5f);
 }
 
-float drawColorBar(ImDrawList* draw, ImVec2 origin, float width, const resolve::ColorScale& scale, const char* title)
-{
-    const float fontSize = ImGui::GetFontSize();
-    const float barHeight = ImGui::GetFrameHeight();
-    const float gap = std::round(0.3f * fontSize);
-    const float tickLength = std::round(0.3f * fontSize);
-    const std::string aboveLabel = scale.aboveLabel();
-    const float boxWidth = std::round(std::max(1.6f * fontSize, ImGui::CalcTextSize(aboveLabel.c_str()).x + fontSize));
-    const ImU32 outline = ImGui::GetColorU32(ImGuiCol_Border);
-    const ImU32 text = ImGui::GetColorU32(ImGuiCol_Text);
+namespace {
 
-    draw->AddText(origin, text, title);
-    const float top = origin.y + fontSize + gap;
-    const float bottom = top + barHeight;
-    const float rampLeft = origin.x + boxWidth + gap;
-    const float rampRight = origin.x + width - boxWidth - gap;
-    const float textInBox = top + 0.5f * (barHeight - fontSize);
+// Paints a legend into an ImGui draw list; resolve::paintLegend() gives the layout, the same as in
+// screenshots. Without a draw list it only measures.
+class DrawListPainter final : public resolve::ILegendPainter {
+public:
+    explicit DrawListPainter(ImDrawList* draw) : draw_(draw) {}
 
-    const auto box = [&](float left, resolve::DisplayColor fill, resolve::DisplayColor ink, const std::string& label) {
-        draw->AddRectFilled({left, top}, {left + boxWidth, bottom}, imguiColor(fill));
-        draw->AddRect({left, top}, {left + boxWidth, bottom}, outline);
-        const float labelWidth = ImGui::CalcTextSize(label.c_str()).x;
-        draw->AddText({std::round(left + 0.5f * (boxWidth - labelWidth)), textInBox}, imguiColor(ink), label.c_str());
-    };
-    box(origin.x, resolve::kZeroCountColor, resolve::kAboveScaleColor, "0");
-    box(origin.x + width - boxWidth, resolve::kAboveScaleColor, resolve::kZeroCountColor, aboveLabel);
-
-    // The map, as horizontal gradients between closely spaced samples.
-    constexpr int kSegments = 64;
-    for (int i = 0; i < kSegments; ++i) {
-        const float t0 = static_cast<float>(i) / kSegments;
-        const float t1 = static_cast<float>(i + 1) / kSegments;
-        const ImU32 c0 = imguiColor(resolve::viridis(t0));
-        const ImU32 c1 = imguiColor(resolve::viridis(t1));
-        draw->AddRectFilledMultiColor({rampLeft + t0 * (rampRight - rampLeft), top},
-                                      {rampLeft + t1 * (rampRight - rampLeft), bottom}, c0, c1, c1, c0);
+    [[nodiscard]] float fontSize() const override { return ImGui::GetFontSize(); }
+    [[nodiscard]] float textWidth(const std::string& text) const override
+    {
+        return ImGui::CalcTextSize(text.c_str()).x;
     }
-    draw->AddRect({rampLeft, top}, {rampRight, bottom}, outline);
-
-    // Ticks below the map. A label that would overlap the one before it is left out.
-    float previousLabelRight = -FLT_MAX;
-    for (const resolve::ScaleTick& tick : scale.ticks()) {
-        const float x = std::round(rampLeft + tick.position * (rampRight - rampLeft));
-        draw->AddLine({x, bottom}, {x, bottom + tickLength}, text);
-        const float labelWidth = ImGui::CalcTextSize(tick.label.c_str()).x;
-        const float labelLeft = std::clamp(x - 0.5f * labelWidth, rampLeft, rampRight - labelWidth);
-        if (labelLeft < previousLabelRight + 0.5f * fontSize) {
-            continue;
+    void fillVertical(float x0, float y0, float x1, float y1, resolve::DisplayColor top,
+                      resolve::DisplayColor bottom) override
+    {
+        if (draw_) {
+            const ImU32 t = imguiColor(top), b = imguiColor(bottom);
+            draw_->AddRectFilledMultiColor({x0, y0}, {x1, y1}, t, t, b, b);
         }
-        draw->AddText({std::round(labelLeft), bottom + tickLength}, text, tick.label.c_str());
-        previousLabelRight = labelLeft + labelWidth;
     }
+    void fillHorizontal(float x0, float y0, float x1, float y1, resolve::DisplayColor left,
+                        resolve::DisplayColor right) override
+    {
+        if (draw_) {
+            const ImU32 l = imguiColor(left), r = imguiColor(right);
+            draw_->AddRectFilledMultiColor({x0, y0}, {x1, y1}, l, r, r, l);
+        }
+    }
+    void outline(float x0, float y0, float x1, float y1, resolve::DisplayColor color) override
+    {
+        if (draw_) {
+            draw_->AddRect({x0 - 0.5f, y0 - 0.5f}, {x1 + 0.5f, y1 + 0.5f}, imguiColor(color));
+        }
+    }
+    void text(float x, float y, const std::string& text, resolve::DisplayColor color) override
+    {
+        if (draw_) {
+            draw_->AddText({x, y}, imguiColor(color), text.c_str());
+        }
+    }
+
+private:
+    ImDrawList* draw_;
+};
+
+} // namespace
+
+float legendHeight(const resolve::ViewLegend& legend, float width)
+{
+    const DrawListPainter metrics(nullptr);
+    return resolve::legendHeight(metrics, legend, width);
+}
+
+float drawLegend(ImDrawList* draw, ImVec2 origin, float width, const resolve::ViewLegend& legend)
+{
+    DrawListPainter painter(draw);
+    const resolve::LegendLayout layout = resolve::paintLegend(painter, legend, origin.x, origin.y, width);
 
     const ImGuiIO& io = ImGui::GetIO();
     const ImVec2 mouse = io.MousePos;
-    if (!io.WantCaptureMouse && mouse.y >= top && mouse.y <= bottom && mouse.x >= origin.x &&
-        mouse.x <= origin.x + width) {
-        if (mouse.x >= rampLeft && mouse.x <= rampRight) {
-            const float t = (mouse.x - rampLeft) / (rampRight - rampLeft);
-            ImGui::SetTooltip("%s: %s", title, resolve::formatCount(scale.countAt(t)).c_str());
-        } else {
-            ImGui::SetTooltip(mouse.x < rampLeft ? "Count 0" : "Count above the scale maximum");
-        }
+    if (layout.hasRamp && !io.WantCaptureMouse && mouse.y >= layout.rampTop && mouse.y <= layout.rampBottom &&
+        mouse.x >= layout.rampLeft && mouse.x <= layout.rampRight) {
+        const float t = (mouse.x - layout.rampLeft) / (layout.rampRight - layout.rampLeft);
+        ImGui::SetTooltip("%s", legend.bar->valueAt(t).c_str());
     }
-    return bottom + tickLength + fontSize - origin.y;
+    return layout.height;
 }
 
 PixelRect framebufferRect(ImVec2 areaMin, ImVec2 areaMax)

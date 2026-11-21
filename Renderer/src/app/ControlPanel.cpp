@@ -698,15 +698,16 @@ void ControlPanel::drawImageOverlay() const
     // Nothing of the overlay may spill over the windows around the image.
     draw->PushClipRect(imageMin_, imageMax_, true);
 
-    // The colour bar of a count view, on the image under the picture.
-    if (resolve::showsCount(shading_.mode)) {
+    // The legend of the view, on the image in its bottom left corner.
+    if (const resolve::ViewLegend legend = resolve::legendFor(shading_); !legend.empty()) {
         const float margin = ImGui::GetFontSize();
-        const float barWidth = std::min(imageMax_.x - imageMin_.x - 2.0f * margin, 40.0f * ImGui::GetFontSize());
-        const float barHeight = 2.0f * ImGui::GetFontSize() + ImGui::GetFrameHeight() + 6.0f;
-        const ImVec2 origin{imageMin_.x + margin, imageMax_.y - margin - barHeight};
-        draw->AddRectFilled({origin.x - 6.0f, origin.y - 4.0f},
-                            {origin.x + barWidth + 6.0f, imageMax_.y - margin + 4.0f}, IM_COL32(18, 18, 18, 210));
-        drawColorBar(draw, origin, barWidth, shading_.workScale, resolve::countedQuantity(shading_.mode));
+        const float legendWidth = std::min(imageMax_.x - imageMin_.x - 2.0f * margin, 32.0f * ImGui::GetFontSize());
+        const float legendTall = legendHeight(legend, legendWidth);
+        const ImVec2 origin{imageMin_.x + margin, imageMax_.y - margin - legendTall};
+        draw->AddRectFilled({origin.x - 8.0f, origin.y - 6.0f},
+                            {origin.x + legendWidth + 8.0f, imageMax_.y - margin + 6.0f}, IM_COL32(18, 18, 18, 210),
+                            4.0f);
+        drawLegend(draw, origin, legendWidth, legend);
     }
 
     // The depth map belongs to one camera position. While the camera moves, lines are drawn plain.

@@ -14,6 +14,7 @@ add_executable(thesis_tests
     TestRayOrder.cpp
     TestSearchStructures.cpp
     TestShaderLayouts.cpp
+    TestViewLegend.cpp
     TestVoxel.cpp
     VoxelTestHelpers.cpp
     VoxelTestHelpers.h)

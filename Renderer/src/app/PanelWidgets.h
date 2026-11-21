@@ -4,8 +4,8 @@
 
 #include "Letterbox.h"
 
-#include "thesis/resolve/ColorScale.h"
 #include "thesis/resolve/ShadingParams.h"
+#include "thesis/resolve/ViewLegend.h"
 
 #include <imgui.h>
 
@@ -45,12 +45,13 @@ bool sectionHeader(const char* title, bool openByDefault = true);
 // A label in a fixed-width column, so the controls after it line up: "Layout   (o) inline ( ) split".
 void rowLabel(const char* label);
 
-// The colour bar of a count view: a black box for 0, the colour map with ticks, a white box for
-// counts above the maximum. The colours are the ones of the image (resolve::ColorScale), the same
-// bar that --screenshot puts below the image. Hovering the map shows the count at that colour.
-// Drawn into `draw` from `origin` (top left, the title first) with `width`; returns the height it
-// used. When the mouse is over the bar (and not over a window), a tooltip shows the count there.
-float drawColorBar(ImDrawList* draw, ImVec2 origin, float width, const resolve::ColorScale& scale, const char* title);
+// The legend of a view (resolve::legendFor), with the same layout as below a --screenshot image.
+// Drawn into `draw` from `origin` (top left) in a column of `width`; returns the height it used.
+// When the mouse is over the colour strip of a bar (and not over a window), a tooltip shows the
+// value there.
+float drawLegend(ImDrawList* draw, ImVec2 origin, float width, const resolve::ViewLegend& legend);
+// The height drawLegend() would use.
+[[nodiscard]] float legendHeight(const resolve::ViewLegend& legend, float width);
 
 // Where the frame is in the window: pixel (x, y) of the frame covers the window points from
 // (left + x * scale, top + y * scale), in ImGui coordinates. `area` is the image area of the

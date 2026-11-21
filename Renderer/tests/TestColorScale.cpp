@@ -1,6 +1,5 @@
 // The colour scale of the work views and the colour bar of screenshots. No GPU.
 
-#include "thesis/resolve/ColorBarImage.h"
 #include "thesis/resolve/ColorScale.h"
 
 #include <catch2/catch_approx.hpp>
@@ -99,30 +98,24 @@ TEST_CASE("colour scale ticks are round counts inside the map", "[resolve]")
     CHECK(resolve::formatCount(2.5) == "2.5");
 }
 
-TEST_CASE("colour bar strip goes below the image with the colours of the scale", "[resolve]")
+TEST_CASE("round ticks lie on round steps inside the range", "[resolve]")
 {
-    resolve::RgbaImage image{640, 360, std::vector<std::byte>(640 * 360 * 4, std::byte{0})};
-    const resolve::RgbaImage result = resolve::withColorBar(image, {64.0f}, "Cells visited per ray");
-
-    REQUIRE(result.width == image.width);
-    REQUIRE(result.height > image.height);
-    REQUIRE(result.pixels.size() == std::size_t{result.width} * result.height * 4);
-    for (std::size_t i = 0; i < image.pixels.size(); ++i) {
-        REQUIRE(result.pixels[i] == image.pixels[i]);
-    }
-
-    // Somewhere in the strip: the white box, and the middle colour of the map.
-    const resolve::DisplayColor middle = resolve::viridis(0.5f);
-    const auto near = [](std::byte value, float expected) {
-        return std::abs(static_cast<int>(value) - static_cast<int>(std::lround(expected * 255.0f))) <= 3;
+    using Values = std::vector<double>;
+    const auto values = [](double start, double end, bool whole) {
+        Values result;
+        for (const resolve::ScaleTick& tick : resolve::roundTicks(start, end, whole)) {
+            result.push_back(tick.value);
+        }
+        return result;
     };
-    bool white = false;
-    bool middleColor = false;
-    for (std::size_t i = image.pixels.size(); i < result.pixels.size(); i += 4) {
-        const std::byte* p = &result.pixels[i];
-        white = white || (p[0] == std::byte{255} && p[1] == std::byte{255} && p[2] == std::byte{255});
-        middleColor = middleColor || (near(p[0], middle.r) && near(p[1], middle.g) && near(p[2], middle.b));
-    }
-    CHECK(white);
-    CHECK(middleColor);
+    CHECK(values(0.0, 64.0, true) == Values{0, 20, 40, 60});
+    CHECK(values(3.0, 17.0, false) == Values{5, 10, 15});
+    CHECK(values(0.0, 1.0, true) == Values{0, 1});
+    CHECK(values(5.0, 5.0, false).empty());
+
+    const std::vector<resolve::ScaleTick> ticks = resolve::roundTicks(0.0, 2.0, false);
+    REQUIRE(ticks.size() == 5);
+    CHECK(ticks[0].label == "0");
+    CHECK(ticks[1].label == "0.5");
+    CHECK(ticks[1].position == Approx(0.25));
 }

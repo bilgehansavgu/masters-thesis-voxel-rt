@@ -85,15 +85,11 @@ std::vector<ScaleTick> ColorScale::ticks() const
             values = std::move(everySecond);
         }
     } else {
-        // A step of 1, 2 or 5 times a power of ten, at least maximum / 5, and at least 1: counts are
-        // whole numbers.
-        const double rough = std::max<double>(maximum, 1.0) / 5.0;
-        const double magnitude = std::pow(10.0, std::floor(std::log10(rough)));
-        const double normalised = rough / magnitude;
-        const double factor = normalised <= 1.0 ? 1.0 : normalised <= 2.0 ? 2.0 : normalised <= 5.0 ? 5.0 : 10.0;
-        const double step = std::max(1.0, factor * magnitude);
-        for (double value = step; value <= maximum * (1.0 + 1e-9); value += step) {
-            values.push_back(value);
+        // Counts are whole numbers. 0 is left out: it has its own black box on a bar.
+        for (const ScaleTick& tick : roundTicks(0.0, std::max<double>(maximum, 1.0), true)) {
+            if (tick.value > 0.0) {
+                values.push_back(tick.value);
+            }
         }
     }
 
@@ -113,6 +109,27 @@ std::string ColorScale::aboveLabel() const
 const char* ColorScale::kindName() const
 {
     return kind == ScaleKind::Log2 ? "log2" : "linear";
+}
+
+std::vector<ScaleTick> roundTicks(double start, double end, bool wholeNumbers)
+{
+    std::vector<ScaleTick> result;
+    const double span = end - start;
+    if (!(span > 0.0)) {
+        return result;
+    }
+    // A step of 1, 2 or 5 times a power of ten, at least span / 5.
+    const double rough = span / 5.0;
+    const double magnitude = std::pow(10.0, std::floor(std::log10(rough)));
+    const double normalised = rough / magnitude;
+    const double factor = normalised <= 1.0 ? 1.0 : normalised <= 2.0 ? 2.0 : normalised <= 5.0 ? 5.0 : 10.0;
+    const double step = wholeNumbers ? std::max(1.0, factor * magnitude) : factor * magnitude;
+    const double tolerance = 1e-9 * std::max(std::abs(start), std::abs(end));
+    for (double k = std::ceil((start - tolerance) / step); k * step <= end + tolerance; k += 1.0) {
+        const double value = k * step + 0.0; // + 0.0 turns -0 (k = -0) into 0, so the label is "0"
+        result.push_back({value, static_cast<float>((value - start) / span), formatCount(value)});
+    }
+    return result;
 }
 
 std::string formatCount(double value)

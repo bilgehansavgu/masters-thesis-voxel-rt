@@ -124,8 +124,10 @@ solid boxes. Docked areas sit around the image (drag a tab to rearrange them):
 - *Search*: the tracer, with the memory of its search structure.
 - *Output*: the view, the light of the lit views, the colour scale of the count views.
 
-**Image** (middle). A count view has its colour bar on the image; the mouse over it shows the
-count of a colour.
+**Image** (middle). Every view whose colours stand for values has its legend on the image: a
+colour bar with ticks for the count views and for the distance, named colour boxes for the two
+category views (9, =). The mouse over a bar shows the value of a colour. Views 1, 3, 4 and 5
+have none.
 
 **Inspector** (right). **Show the search structure** (key S) draws a horizontal cut through the
 structure of the tracer at the **Cut height**: grid cells, octree cubes, BVH boxes at one **Tree
@@ -189,9 +191,10 @@ the hit. "Copy as text" puts the list on the clipboard. The hardware tracer cann
 nodes of its BVH, so its list starts at the primitives.
 
 `--benchmark` is headless and writes `results/<time>_<tracer>[_<encoding>].json`.
-`--screenshot <file.png>` is headless too: it writes one frame, with `--view <1-12>`. A count
-view (6, 7, 8, 10, 11) gets its colour bar in a strip below the image: viridis, black for 0,
-white above `--scale-max <count>` (default 64), linear or with `--log-scale` log2. With
+`--screenshot <file.png>` is headless too: it writes one frame, with `--view <1-12>`. A view
+with a legend (2, 6 to 12) gets it in a strip below the image, as in the window. Count views
+(6, 7, 8, 10, 11): viridis, black for 0, white above `--scale-max <count>` (default 64), linear
+or with `--log-scale` log2. With
 `--inspect <x> <y>` it also prints every step of the ray of that pixel. In the window,
 `--inspect` starts the ray inspector on that pixel. `--brick-size 8|16|32` regroups the voxels
 into bricks of that size before the encoding.

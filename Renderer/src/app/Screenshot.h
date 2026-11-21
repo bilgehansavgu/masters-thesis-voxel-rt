@@ -4,7 +4,7 @@
 
 #include "Options.h"
 
-#include "thesis/resolve/ColorBarImage.h"
+#include "thesis/resolve/LegendImage.h"
 #include "thesis/resolve/ShadingParams.h"
 #include "thesis/tracing/RayLog.h"
 
@@ -19,7 +19,7 @@ namespace thesis::app {
 
 // One frame rendered without a window, as --screenshot makes it.
 struct RenderedFrame {
-    resolve::RgbaImage image;           // the shaded frame, without the colour bar
+    resolve::RgbaImage image;           // the shaded frame, without the legend
     resolve::ShadingParams shading;     // how it was shaded
     std::string tracer;                 // the tracer that traced it
     std::string sceneName;              // for people
@@ -32,8 +32,8 @@ struct RenderedFrame {
 // benchmark. The window's check of "Copy as command" compares its own frame with this one.
 [[nodiscard]] RenderedFrame renderFrame(const gpu::Context& context, const Options& options);
 
-// Renders one frame without a window and writes it to options.screenshot as a PNG file. A count
-// view gets its colour bar in a strip below the image. Returns the process exit code.
+// Renders one frame without a window and writes it to options.screenshot as a PNG file. A view
+// whose colours carry data gets its legend in a strip below the image. Returns the process exit code.
 int runScreenshot(const Options& options);
 
 } // namespace thesis::app

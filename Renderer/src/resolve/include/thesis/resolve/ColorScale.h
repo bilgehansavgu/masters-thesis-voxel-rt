@@ -70,4 +70,9 @@ struct ColorScale {
 // Text of a count on the scale: an integer without decimals, else up to 3 significant digits.
 [[nodiscard]] std::string formatCount(double value);
 
+// Ticks at the multiples of a round step (1, 2 or 5 times a power of ten, at least a fifth of the
+// span) that lie in [start, end]: at most 6 of them. `wholeNumbers`: the step is at least 1.
+// Positions are relative to [start, end].
+[[nodiscard]] std::vector<ScaleTick> roundTicks(double start, double end, bool wholeNumbers);
+
 } // namespace thesis::resolve

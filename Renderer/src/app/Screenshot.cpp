@@ -81,10 +81,11 @@ int runScreenshot(const Options& options)
 
     resolve::RgbaImage image = frame.image;
     const resolve::ShadingParams& shading = frame.shading;
-    if (resolve::showsCount(shading.mode)) {
+    const resolve::ViewLegend legend = resolve::legendFor(shading);
+    if (!legend.empty()) {
         const std::filesystem::path font =
             std::filesystem::is_regular_file(kInterfaceFontFile) ? kInterfaceFontFile : std::filesystem::path{};
-        image = resolve::withColorBar(image, shading.workScale, resolve::countedQuantity(shading.mode), font);
+        image = resolve::withLegend(image, legend, font);
     }
     const std::string file = options.screenshot.string();
     const int written = stbi_write_png(file.c_str(), static_cast<int>(image.width), static_cast<int>(image.height), 4,
@@ -98,6 +99,8 @@ int runScreenshot(const Options& options)
     if (resolve::showsCount(shading.mode)) {
         std::printf("colour scale: viridis, %s, 0 black, maximum %s, above it white\n", shading.workScale.kindName(),
                     resolve::formatCount(shading.workScale.maximum).c_str());
+    } else if (shading.mode == resolve::ShadingMode::Distance) {
+        std::printf("distance range: %g (white) to %g (black)\n", shading.distanceNear, shading.distanceFar);
     }
 
     if (options.validation && gpu::validationMessageCount() > 0) {

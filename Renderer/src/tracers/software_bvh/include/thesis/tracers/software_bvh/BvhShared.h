@@ -1,10 +1,14 @@
+/* Side: Shared */
 /* Numbers of the BVH of the BVH tracer: the ONLY place they are written.
  *
  * Read by the C++ builder (src/tracers/software_bvh) and by trace_software_bvh.slang.
- * Like Bindings.h, this file may contain nothing but #defines and comments.
+ * Like thesis/shared/Bindings.h, this file may contain nothing but #defines and comments.
  */
-#ifndef THESIS_SHARED_BVH_H
-#define THESIS_SHARED_BVH_H
+#ifndef THESIS_TRACERS_BVH_SHARED_H
+#define THESIS_TRACERS_BVH_SHARED_H
+
+/* Bindings of the tracer itself, inside THESIS_BINDING_TRACER_FIRST .. THESIS_BINDING_TRACER_LAST. */
+#define THESIS_BINDING_BVH_NODES 2 /* the nodes */
 
 /* BvhNode.primitive of an inner node. */
 #define THESIS_BVH_NO_PRIMITIVE 0xFFFFFFFF

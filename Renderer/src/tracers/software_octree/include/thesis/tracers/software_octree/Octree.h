@@ -1,7 +1,9 @@
 #pragma once
 
+// Side: CPU
+
 #include "thesis/core/GpuTypes.h"
-#include "thesis/tracers/software_grid/UniformGrid.h"
+#include "thesis/tracing/GridFrame.h"
 
 #include <glm/vec3.hpp>
 
@@ -19,7 +21,7 @@ namespace thesis::tracers {
 // large it is, so a ray crosses empty space in a few large steps. This is what the uniform
 // grid cannot do.
 //
-// The words of `nodes` and `items` are described in thesis/shared/Octree.h.
+// The words of `nodes` and `items` are described in OctreeShared.h.
 // trace_software_octree.slang walks the tree.
 struct Octree {
     glm::vec3 origin{0.0f}; // corner of cell (0, 0, 0)
@@ -32,7 +34,7 @@ struct Octree {
 // Builds the octree. A primitive belongs to the cells that frame.forEachCellOf gives, the same
 // cells as in the uniform grid. Only cells with a primitive get nodes, so the cost and the
 // memory follow the number of primitives, not the volume of the scene.
-[[nodiscard]] Octree buildOctree(std::span<const core::Aabb> boxes, const GridFrame& frame);
+[[nodiscard]] Octree buildOctree(std::span<const core::Aabb> boxes, const tracing::GridFrame& frame);
 
 // What a walk from the root finds for one cell: the primitives of the cell, and the size of
 // the cube that the walk ended in (cells along one side). For tests.

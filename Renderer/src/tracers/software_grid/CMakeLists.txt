@@ -1,5 +1,6 @@
 thesis_add_library(tracer_software_grid
     SOURCES
+        GridDiagram.cpp
         GridTracer.cpp
         UniformGrid.cpp
     PUBLIC_DEPS thesis::tracing

@@ -9,14 +9,42 @@
 
 namespace thesis::core {
 
-CameraFrame OrbitCamera::frame(float aspectRatio) const
+namespace {
+
+// Unit vector from the target to the eye.
+glm::vec3 eyeDirection(float yawDegrees, float pitchDegrees)
 {
     const float pitch = glm::radians(std::clamp(pitchDegrees, -89.0f, 89.0f));
     const float yaw = glm::radians(yawDegrees);
-    const glm::vec3 offset{std::cos(pitch) * std::sin(yaw), std::sin(pitch), std::cos(pitch) * std::cos(yaw)};
+    return {std::cos(pitch) * std::sin(yaw), std::sin(pitch), std::cos(pitch) * std::cos(yaw)};
+}
 
+} // namespace
+
+glm::vec3 OrbitCamera::eye() const
+{
+    return target + distance * eyeDirection(yawDegrees, pitchDegrees);
+}
+
+void OrbitCamera::turnInPlace(float yawStepDegrees, float pitchStepDegrees)
+{
+    const glm::vec3 fixedEye = eye();
+    yawDegrees += yawStepDegrees;
+    pitchDegrees = std::clamp(pitchDegrees + pitchStepDegrees, -89.0f, 89.0f);
+    target = fixedEye - distance * eyeDirection(yawDegrees, pitchDegrees);
+}
+
+void OrbitCamera::fly(float forward, float right, float up)
+{
+    const glm::vec3 view = -eyeDirection(yawDegrees, pitchDegrees);
+    const glm::vec3 side = glm::normalize(glm::cross(view, glm::vec3(0.0f, 1.0f, 0.0f)));
+    target += forward * view + right * side + glm::vec3(0.0f, up, 0.0f);
+}
+
+CameraFrame OrbitCamera::frame(float aspectRatio) const
+{
     CameraFrame result;
-    result.origin = target + distance * offset;
+    result.origin = eye();
     result.forward = glm::normalize(target - result.origin);
     const glm::vec3 right = glm::normalize(glm::cross(result.forward, glm::vec3(0.0f, 1.0f, 0.0f)));
     const glm::vec3 up = glm::cross(right, result.forward);

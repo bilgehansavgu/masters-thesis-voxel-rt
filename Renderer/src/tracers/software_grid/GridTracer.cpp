@@ -5,6 +5,8 @@
 // search structure: every cell is stored, also the empty ones, and a ray takes one step for
 // each cell on its way. The octree and the BVH tracers are the structures with a hierarchy.
 
+#include "GridDiagram.h"
+#include "thesis/tracers/software_grid/GridShared.h"
 #include "thesis/tracers/software_grid/UniformGrid.h"
 
 #include "thesis/gpu/Buffer.h"
@@ -15,6 +17,7 @@
 #include <glm/vec3.hpp>
 
 #include <chrono>
+#include <format>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -26,6 +29,7 @@ namespace {
 
 constexpr std::uint32_t kCellsBinding = THESIS_BINDING_GRID_CELLS;
 constexpr std::uint32_t kItemsBinding = THESIS_BINDING_GRID_ITEMS;
+static_assert(kCellsBinding >= THESIS_BINDING_TRACER_FIRST && kItemsBinding <= THESIS_BINDING_TRACER_LAST);
 
 // Mirrors TraceParams in trace_software_grid.slang.
 struct TraceParams {
@@ -49,6 +53,21 @@ public:
     {}
 
     std::string_view name() const override { return "software_grid"; }
+    tracing::TracerText text() const override
+    {
+        return {"Uniform grid",
+                "Space is cut into equal cells, one cell per brick. The ray steps through every cell on its path, also "
+                "the empty ones.",
+                "grid cells"};
+    }
+    std::unique_ptr<tracing::IStructureDiagram> diagram(const tracing::DiagramInput& input) const override
+    {
+        return makeGridDiagram(input);
+    }
+    std::string describeStructureStep(const core::RayLogEntry& step) const override
+    {
+        return std::format("grid cell ({}, {}, {})", step.a, step.b, step.c);
+    }
 
     tracing::PrepareReport prepare(const tracing::GpuScene& scene) override
     {
@@ -57,7 +76,7 @@ public:
         const auto start = std::chrono::steady_clock::now();
         UniformGrid grid;
         try {
-            grid = buildUniformGrid(boxes, chooseGridFrame(boxes.size(), scene.bounds, scene.primitiveGrid));
+            grid = buildUniformGrid(boxes, tracing::chooseGridFrame(boxes.size(), scene.bounds, scene.primitiveGrid));
         } catch (const std::length_error& reason) {
             throw tracing::UnsupportedScene(reason.what());
         }

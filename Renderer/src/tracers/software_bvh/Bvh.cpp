@@ -1,6 +1,6 @@
 #include "thesis/tracers/software_bvh/Bvh.h"
 
-#include "thesis/shared/Bvh.h"
+#include "thesis/tracers/software_bvh/BvhShared.h"
 
 #include <glm/common.hpp>
 

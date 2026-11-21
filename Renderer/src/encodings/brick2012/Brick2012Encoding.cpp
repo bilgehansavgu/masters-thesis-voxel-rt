@@ -315,6 +315,7 @@ public:
             const EncodedBrick& brick = encoded[i];
             const glm::uvec3& at = model.bricks[i].coordinate;
             const auto cellBase = static_cast<std::uint32_t>(cellsPerBrick * i);
+            result.bricks.push_back({at, static_cast<int>(brick.axis)});
             table.push_back({at.x | (at.y << THESIS_BRICK_COORDINATE_BITS) |
                                  (at.z << (2 * THESIS_BRICK_COORDINATE_BITS)) | (brick.axis << THESIS_BRICK_AXIS_SHIFT),
                              cellBase, static_cast<std::uint32_t>(indirection.size()),
@@ -519,6 +520,9 @@ private:
         }
     }
 
+    bool skipsEmptySpace() const override { return mipmap_; }
+    std::string skippingTwin() const override { return std::string(Brick2012Encoding(layout_, !mipmap_).name()); }
+
     Layout layout_;
     bool mipmap_;
 };
@@ -530,8 +534,10 @@ namespace thesis::plugins {
 
 void registerBrick2012Encodings(encoding::EncodingRegistry& registry)
 {
-    registry.add("brick2012_inline", "2012 brick format, attributes next to the heights (the order of the paper).",
-                 [] { return std::make_unique<brick2012::Brick2012Encoding>(brick2012::Layout::Inline, false); });
+    registry.add(
+        "brick2012_inline", "2012 brick format, attributes next to the heights (the order of the paper).",
+        [] { return std::make_unique<brick2012::Brick2012Encoding>(brick2012::Layout::Inline, false); },
+        core::Pick::Default);
     registry.add("brick2012_split", "2012 brick format, attributes in their own buffer.",
                  [] { return std::make_unique<brick2012::Brick2012Encoding>(brick2012::Layout::Split, false); });
     registry.add("brick2012_inline_mip",

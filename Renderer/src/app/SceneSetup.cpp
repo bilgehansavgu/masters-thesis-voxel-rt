@@ -26,14 +26,16 @@ SceneSource::SceneSource(const Options& options) : gridSize_(options.gridSize), 
     model_ = voxel::loadVoxelModel(options.model);
     registry_ = makeEncodingRegistry();
     for (const auto& entry : registry_.entries()) {
-        encodings_.push_back({entry.name, entry.description});
+        const auto encoding = registry_.create(entry.name);
+        encodings_.push_back({entry.name, entry.description, encoding->skipsEmptySpace(), encoding->skippingTwin()});
     }
     if (encodings_.empty()) {
         throw std::runtime_error("No encoding is built into this program");
     }
-    if (!options.encoding.empty()) {
+    const std::string& wanted = options.encoding.empty() ? registry_.defaultName() : options.encoding;
+    {
         const auto it = std::find_if(encodings_.begin(), encodings_.end(),
-                                     [&](const EncodingChoice& choice) { return choice.name == options.encoding; });
+                                     [&](const EncodingChoice& choice) { return choice.name == wanted; });
         if (it == encodings_.end()) {
             throw std::invalid_argument("Unknown encoding '" + options.encoding +
                                         "'. Use --list-encodings to see the options.");
@@ -60,6 +62,24 @@ const voxel::VoxelModel& SceneSource::modelWithBricksOf(std::uint32_t brickSize)
     return *regrouped_;
 }
 
+const voxel::VoxelBrick* SceneSource::findBrick(std::uint32_t brickSize, glm::uvec3 coordinate)
+{
+    if (!model_) {
+        return nullptr;
+    }
+    const voxel::VoxelModel& model = modelWithBricksOf(brickSize);
+    // The bricks are stored in ascending order of x + sizeX * (y + sizeY * z) (VoxelModel.h).
+    const glm::uvec3 bricks = model.grid.size / model.grid.brickSize;
+    const auto key = [&](glm::uvec3 c) {
+        return static_cast<std::uint64_t>(c.x) + bricks.x * (static_cast<std::uint64_t>(c.y) + bricks.y * c.z);
+    };
+    const std::uint64_t wanted = key(coordinate);
+    const auto found =
+        std::lower_bound(model.bricks.begin(), model.bricks.end(), wanted,
+                         [&](const voxel::VoxelBrick& brick, std::uint64_t k) { return key(brick.coordinate) < k; });
+    return found != model.bricks.end() && found->coordinate == coordinate ? &*found : nullptr;
+}
+
 BuiltScene SceneSource::build(std::size_t encoding, std::uint32_t brickSize)
 {
     BuiltScene built;
@@ -82,6 +102,7 @@ BuiltScene SceneSource::build(std::size_t encoding, std::uint32_t brickSize)
 
     built.scene = std::move(encoded.scene);
     built.statistics = std::move(encoded.statistics);
+    built.bricks = std::move(encoded.bricks);
     built.encoding = name;
     built.brickSize = model.grid.brickSize;
     built.voxels = model.voxelCount();
@@ -93,6 +114,8 @@ BuiltScene SceneSource::build(std::size_t encoding, std::uint32_t brickSize)
 
 core::OrbitCamera startCamera(const Options& options, const core::Bounds& bounds)
 {
+    if (options.exactCamera)
+        return *options.exactCamera;
     core::OrbitCamera camera = core::OrbitCamera::framing(bounds);
     camera.yawDegrees = options.camera.at(0);
     camera.pitchDegrees = options.camera.at(1);

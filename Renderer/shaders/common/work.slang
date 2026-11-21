@@ -67,12 +67,12 @@ public struct WorkCounter
         gRayLog[logged] = entry;
     }
 
-    // A cell or node of the tracer's own search structure. `kind` is one of THESIS_LOG_GRID_CELL,
-    // THESIS_LOG_OCTREE_NODE, THESIS_LOG_BVH_NODE; a to d as described there.
-    [mutating] public void structureStep(uint kind, uint a, uint b, uint c, uint d)
+    // A cell or node of the tracer's own search structure. a to d: what the tracer says (its shader
+    // and ITracer::describeStructureStep).
+    [mutating] public void structureStep(uint a, uint b, uint c, uint d)
     {
         work.structureSteps += 1;
-        log(kind, a, b, c, d, 0, 0, 0.0);
+        log(THESIS_LOG_STRUCTURE_STEP, a, b, c, d, 0, 0, 0.0);
     }
 
     [mutating] public void primitiveTest(uint primitive)
@@ -145,7 +145,7 @@ public struct WorkCounter
         return counter;
     }
 
-    [mutating] public void structureStep(uint kind, uint a, uint b, uint c, uint d) {}
+    [mutating] public void structureStep(uint a, uint b, uint c, uint d) {}
     [mutating] public void primitiveTest(uint primitive) {}
     [mutating] public void closerHit(uint primitive, float t) {}
     [mutating] public void result(Hit hit) {}

@@ -5,17 +5,18 @@ import normals;
 import display;
 #include "thesis/shared/Bindings.h"
 #include "thesis/shared/Hit.h"
+#include "thesis/shared/RayOrder.h"
 
 struct ShadeParams
 {
     uint width;
     uint height;
     uint mode;  // 0 shaded, 1 distance, 2 primitive id, 3 normal, 4 faces
-    uint pad0;
+    uint rayOrder; // THESIS_RAY_ORDER_*: where the hit of a pixel is in the hit list
     float distanceNear;
     float distanceFar;
-    float pad1;
-    float pad2;
+    float lightAzimuth;   // radians, around the up axis (y), 0 = towards +z
+    float lightElevation; // radians above the horizontal plane
 };
 
 [[vk::push_constant]] ConstantBuffer<ShadeParams> gParams;
@@ -42,7 +43,9 @@ float3 faceNormal(uint face)
 
 float3 lit(float3 base, float3 normal)
 {
-    float3 toLight = normalize(float3(0.4, 1.0, 0.3));
+    const float horizontal = cos(gParams.lightElevation);
+    const float3 toLight = float3(horizontal * sin(gParams.lightAzimuth), sin(gParams.lightElevation),
+                                  horizontal * cos(gParams.lightAzimuth));
     return base * (0.25 + 0.75 * max(dot(normal, toLight), 0.0));
 }
 
@@ -53,7 +56,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
     if (threadId.x >= gParams.width || threadId.y >= gParams.height)
         return;
 
-    Hit hit = gHits[threadId.y * gParams.width + threadId.x];
+    Hit hit = gHits[THESIS_RAY_INDEX(gParams.rayOrder, threadId.x, threadId.y, gParams.width, gParams.height)];
     // The normal that the primitive kind stores for the hit point. A kind without one (the box)
     // gets the normal of the face.
     const bool hasStoredNormal = (hit.attributes & THESIS_HIT_HAS_NORMAL) != 0;

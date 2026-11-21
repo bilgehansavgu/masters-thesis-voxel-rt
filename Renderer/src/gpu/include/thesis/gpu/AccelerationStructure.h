@@ -1,5 +1,7 @@
 #pragma once
 
+// Side: GPU
+
 #include "thesis/gpu/Buffer.h"
 
 #include <vulkan/vulkan.h>

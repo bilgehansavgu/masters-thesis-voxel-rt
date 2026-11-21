@@ -1,5 +1,7 @@
 #pragma once
 
+// Side: CPU
+
 #include "thesis/core/Scene.h"
 
 #include <cstdint>

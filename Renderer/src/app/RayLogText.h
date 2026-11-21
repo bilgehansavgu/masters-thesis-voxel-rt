@@ -1,7 +1,10 @@
 #pragma once
 
+// Side: View
+
 #include "thesis/tracing/RayLog.h"
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -16,8 +19,12 @@ struct RayLogLine {
     bool important = false; // a hit, or a mipmap square that the walk skipped
 };
 
+// Turns a step through the search structure into words; the tracer's ITracer::describeStructureStep.
+using StructureStepText = std::function<std::string(const core::RayLogEntry&)>;
+
 // The steps of `log` in words (thesis/shared/RayLog.h says what each entry means).
-[[nodiscard]] std::vector<RayLogLine> describeRayLog(const tracing::RayLog& log);
+[[nodiscard]] std::vector<RayLogLine> describeRayLog(const tracing::RayLog& log,
+                                                     const StructureStepText& structureStep);
 
 // All lines as one text, indented by depth: for the clipboard.
 [[nodiscard]] std::string rayLogAsText(const std::vector<RayLogLine>& lines);

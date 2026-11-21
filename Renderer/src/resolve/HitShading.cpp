@@ -15,11 +15,11 @@ struct ShadeParams {
     std::uint32_t width;
     std::uint32_t height;
     std::uint32_t mode;
-    std::uint32_t pad0;
+    std::uint32_t rayOrder; // tracing::RayOrder
     float distanceNear;
     float distanceFar;
-    float pad1;
-    float pad2;
+    float lightAzimuth;
+    float lightElevation;
 };
 
 // Mirrors ShadeWorkParams in shade_work.slang.
@@ -28,9 +28,9 @@ struct ShadeWorkParams {
     std::uint32_t height;
     std::uint32_t mode; // 0 cells, 1 primitives, 2 runs, 3 kind of the cell at the hit, 4 structure steps, 5 mipmap
                         // cells, 6 largest square skipped
-    std::uint32_t pad0;
+    std::uint32_t scaleKind;
     float scale;
-    float pad1;
+    std::uint32_t rayOrder; // tracing::RayOrder
     float pad2;
     float pad3;
 };
@@ -60,16 +60,28 @@ void HitShading::shade(VkCommandBuffer cmd, const tracing::RayBatch& batch, VkIm
     if (showsWork(params.mode) && work != nullptr) {
         const std::uint32_t workMode =
             static_cast<std::uint32_t>(params.mode) - static_cast<std::uint32_t>(ShadingMode::WorkCells);
-        const ShadeWorkParams push{batch.width, batch.height, workMode, 0, params.workScale, 0.0f, 0.0f, 0.0f};
+        const ShadeWorkParams push{batch.width,
+                                   batch.height,
+                                   workMode,
+                                   static_cast<std::uint32_t>(params.workScale.kind),
+                                   params.workScale.maximum,
+                                   static_cast<std::uint32_t>(batch.order),
+                                   0.0f,
+                                   0.0f};
         resources.buffer(kWorkBinding, *work);
         workKernel_.dispatch(cmd, resources, groupsX, groupsY, 1, push);
         return;
     }
 
     const ShadingMode mode = showsWork(params.mode) ? ShadingMode::Shaded : params.mode;
-    const ShadeParams push{
-        batch.width, batch.height, static_cast<std::uint32_t>(mode), 0, params.distanceNear, params.distanceFar,
-        0.0f,        0.0f};
+    const ShadeParams push{batch.width,
+                           batch.height,
+                           static_cast<std::uint32_t>(mode),
+                           static_cast<std::uint32_t>(batch.order),
+                           params.distanceNear,
+                           params.distanceFar,
+                           params.light.azimuth,
+                           params.light.elevation};
     kernel_.dispatch(cmd, resources, groupsX, groupsY, 1, push);
 }
 

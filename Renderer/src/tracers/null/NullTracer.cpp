@@ -29,6 +29,7 @@ public:
     explicit NullTracer(const tracing::TracerEnvironment& environment) : environment_(environment) {}
 
     std::string_view name() const override { return "null"; }
+    tracing::TracerText text() const override { return {"Memory baseline", ""}; }
 
     tracing::PrepareReport prepare(const tracing::GpuScene& /*scene*/) override
     {

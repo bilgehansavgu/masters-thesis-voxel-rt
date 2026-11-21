@@ -47,6 +47,11 @@ bool Window::minimised() const
     return extent.width == 0 || extent.height == 0;
 }
 
+bool Window::focused() const
+{
+    return glfwGetWindowAttrib(window_, GLFW_FOCUSED) != 0;
+}
+
 bool Window::shouldClose() const
 {
     return glfwWindowShouldClose(window_) != 0;

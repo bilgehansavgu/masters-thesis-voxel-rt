@@ -1,10 +1,14 @@
 #pragma once
 
+// Side: GPU
+
 // Order matters: TracyVulkan.hpp needs the Vulkan header first (separate blocks keep the
 // formatter from sorting them).
 #include <vulkan/vulkan.h>
 
 #include <tracy/TracyVulkan.hpp>
+
+#include "thesis/gpu/StageTiming.h"
 
 #include <cstdint>
 #include <vector>
@@ -12,11 +16,6 @@
 namespace thesis::gpu {
 
 class Context;
-
-struct StageTiming {
-    const char* stage; // static string, also used as the Tracy zone / plot name
-    double milliseconds;
-};
 
 // Measures GPU time of named stages with timestamp queries. One frame at a time:
 //   reset(cmd) → scopes → submit → wait for the GPU → resolve()

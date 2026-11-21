@@ -6,8 +6,11 @@
 
 #include <CLI/CLI.hpp>
 
+#include <cstdint>
 #include <cstdio>
 #include <exception>
+#include <map>
+#include <string>
 
 int main(int argc, char** argv)
 {
@@ -16,9 +19,17 @@ int main(int argc, char** argv)
 
     CLI::App cli{"Thesis renderer: hardware vs software ray tracing behind one tracer socket"};
     cli.add_flag("--benchmark", options.benchmark, "Run the headless benchmark and write results files");
+    cli.add_flag("--fixed-view", options.fixedView, "Benchmark a stationary camera");
+    cli.add_flag("--compare-skipping", options.compareSkipping, "Compare skipping off and on at one camera pose");
+    cli.add_option("--open-result", options.openResult, "Reopen the scene and pose of a fixed-view benchmark")
+        ->check(CLI::ExistingFile);
     cli.add_option("--screenshot", options.screenshot, "Write one frame to this PNG file, without a window");
     cli.add_option("--view", options.view, "Screenshot: the view, numbered as in the panel of the window: 1 to 12")
         ->check(CLI::Range(1, 12));
+    cli.add_option("--scale-max", options.scaleMaximum,
+                   "Screenshot of a count view: the count at the end of the colour map; a larger count is white")
+        ->check(CLI::Range(1.0f, 4096.0f));
+    cli.add_flag("--log-scale", options.logScale, "Screenshot of a count view: log2 colour scale instead of linear");
     cli.add_option("--inspect", options.inspect,
                    "The ray inspector on pixel x y of the frame. Window: starts on that ray. Screenshot: also "
                    "prints every step of that ray")
@@ -39,14 +50,20 @@ int main(int argc, char** argv)
         ->check(CLI::IsMember({8, 16, 32}));
     cli.add_option("--grid", options.gridSize, "Box field: boxes per side")->check(CLI::PositiveNumber);
     cli.add_option("--seed", options.seed, "Box field: random seed");
+    cli.add_flag("--boxes", options.boxExample, "Open the box tracing example")->excludes("--model");
     cli.add_option("--width", options.width, "Render width (rays per row)")->check(CLI::PositiveNumber);
     cli.add_option("--height", options.height, "Render height")->check(CLI::PositiveNumber);
+    cli.add_option("--ray-order", options.rayOrder,
+                   "Where the ray of a pixel sits in the ray list: rows (row by row) or tiles (8 x 4 pixels per "
+                   "warp)")
+        ->transform(CLI::CheckedTransformer(
+            std::map<std::string, std::uint32_t>{{"rows", THESIS_RAY_ORDER_ROWS}, {"tiles", THESIS_RAY_ORDER_TILES}}));
     cli.add_option("--warmup", options.warmupSeconds, "Benchmark: minimum warm-up seconds for each tracer")
         ->check(CLI::NonNegativeNumber);
     cli.add_option("--warmup-max", options.warmupMaxSeconds,
                    "Benchmark: maximum warm-up seconds while waiting for the GPU clock and the trace time to settle")
         ->check(CLI::NonNegativeNumber);
-    cli.add_option("--frames", options.frames, "Benchmark: frames per repeat (one orbit)")->check(CLI::PositiveNumber);
+    cli.add_option("--frames", options.frames, "Benchmark: frames per repeat")->check(CLI::PositiveNumber);
     cli.add_option("--repeats", options.repeats, "Benchmark: repeats per tracer")->check(CLI::PositiveNumber);
     cli.add_option("--cooldown", options.cooldownSeconds, "Benchmark: seconds of idle time between tracers");
     cli.add_option("--output", options.outputDirectory, "Benchmark: directory for results files");
@@ -56,8 +73,15 @@ int main(int argc, char** argv)
                  "Window: use every control of the panel once, then close (smoke test of the window)");
     cli.add_option("--shader-dir", options.shaderDirectory, "Directory with the compiled shaders");
     CLI11_PARSE(cli, argc, argv);
+    options.boxExample = options.boxExample || (options.model.empty() && (cli.count("--grid") || cli.count("--seed")));
 
     try {
+        if (!options.openResult.empty())
+            thesis::app::restoreResult(options);
+        if (options.compareSkipping) {
+            auto comparison = thesis::app::compareView(options);
+            return comparison.hits.agrees() ? 0 : 2;
+        }
         if (options.listTracers) {
             const auto registry = thesis::app::makeTracerRegistry(); // must outlive the loop
             for (const auto& entry : registry.entries()) {

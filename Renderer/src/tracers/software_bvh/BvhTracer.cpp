@@ -6,15 +6,17 @@
 // so the two differ in who walks the tree, not in the idea. The BVH (Bvh.h) is built on the
 // CPU when a scene is prepared.
 
+#include "BvhDiagram.h"
 #include "thesis/tracers/software_bvh/Bvh.h"
 
 #include "thesis/gpu/Buffer.h"
-#include "thesis/shared/Bvh.h"
+#include "thesis/tracers/software_bvh/BvhShared.h"
 #include "thesis/tracing/Bindings.h"
 #include "thesis/tracing/TraceKernels.h"
 #include "thesis/tracing/Tracer.h"
 
 #include <chrono>
+#include <format>
 #include <memory>
 #include <span>
 #include <string>
@@ -25,6 +27,7 @@ namespace thesis::tracers {
 namespace {
 
 constexpr std::uint32_t kNodesBinding = THESIS_BINDING_BVH_NODES;
+static_assert(kNodesBinding >= THESIS_BINDING_TRACER_FIRST && kNodesBinding <= THESIS_BINDING_TRACER_LAST);
 
 // Mirrors TraceParams in trace_software_bvh.slang.
 struct TraceParams {
@@ -43,6 +46,21 @@ public:
     {}
 
     std::string_view name() const override { return "software_bvh"; }
+    tracing::TracerText text() const override
+    {
+        return {"Software BVH",
+                "A tree of boxes (a BVH). Each box encloses a group of bricks and follows the shape of the model. The "
+                "ray skips every box it misses. The GPU uses the same kind of tree, walked by its own units.",
+                "tree boxes"};
+    }
+    std::unique_ptr<tracing::IStructureDiagram> diagram(const tracing::DiagramInput& input) const override
+    {
+        return makeBvhDiagram(input);
+    }
+    std::string describeStructureStep(const core::RayLogEntry& step) const override
+    {
+        return std::format("BVH node {}", step.a);
+    }
 
     tracing::PrepareReport prepare(const tracing::GpuScene& scene) override
     {

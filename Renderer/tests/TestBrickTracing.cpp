@@ -12,6 +12,7 @@
 #include "thesis/mesh/TriangleMesh.h"
 #include "thesis/shared/Hit.h"
 #include "thesis/shared/RayLog.h"
+#include "thesis/tracing/RayLog.h"
 #include "thesis/voxel/Voxelizer.h"
 
 #include <catch2/catch_approx.hpp>
@@ -19,6 +20,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <optional>
 #include <string>
@@ -324,10 +326,15 @@ TEST_CASE("the counting variant finds the same hits and counts the work", "[gpu]
         std::uint64_t cells = 0;
         std::uint64_t mipmapCells = 0;
         std::uint64_t runs = 0;
+        bool skipsEmptySpace = false; // encoding::IEncoding::skipsEmptySpace
+        std::string skippingTwin;     // encoding::IEncoding::skippingTwin
     };
     std::map<std::string, TotalWork> totals;
     for (const std::string& encodingName : encodings.names()) {
-        const core::Scene scene = encodings.create(encodingName)->encode(model).scene;
+        const auto encoder = encodings.create(encodingName);
+        totals[encodingName].skipsEmptySpace = encoder->skipsEmptySpace();
+        totals[encodingName].skippingTwin = encoder->skippingTwin();
+        const core::Scene scene = encoder->encode(model).scene;
         const tracing::GpuScene gpuScene = tracing::GpuScene::upload(context, scene);
         const tests::HitFindingTracers set = tests::makeHitFindingTracers(context, gpuScene);
         const core::CameraFrame camera = tests::cameraFrame(scene.bounds, {35.0f, 30.0f, 0.7f}, 4.0f / 3.0f);
@@ -380,17 +387,19 @@ TEST_CASE("the counting variant finds the same hits and counts the work", "[gpu]
     std::size_t withMipmap = 0;
     for (const auto& [name, total] : totals) {
         INFO(name);
-        if (!name.ends_with("_mip")) {
+        if (!total.skipsEmptySpace) {
             CHECK(total.mipmapCells == 0);
             continue;
         }
-        const TotalWork& plain = totals.at(name.substr(0, name.size() - 4));
+        REQUIRE_FALSE(total.skippingTwin.empty());
+        const TotalWork& plain = totals.at(total.skippingTwin);
+        REQUIRE_FALSE(plain.skipsEmptySpace);
         CHECK(total.mipmapCells > 0);
         CHECK(total.cells < plain.cells);
         CHECK(total.runs <= plain.runs);
         ++withMipmap;
     }
-    CHECK(withMipmap == 2);
+    CHECK(withMipmap > 0);
 
     CHECK(gpu::validationMessageCount() == validationBefore);
 }
@@ -436,38 +445,13 @@ TEST_CASE("the ray log of a ray agrees with its work counters and its hit", "[gp
                 CHECK(log.lostSteps == 0);
                 REQUIRE_FALSE(log.steps.empty());
 
-                core::RayWork fromLog{};
+                const core::RayWork fromLog = tracing::countWork(log);
                 std::uint32_t lastCloserHit = core::kNoHit;
                 float lastCloserT = 0.0f;
                 for (const core::RayLogEntry& step : log.steps) {
-                    switch (step.kind) {
-                    case THESIS_LOG_GRID_CELL:
-                    case THESIS_LOG_OCTREE_NODE:
-                    case THESIS_LOG_BVH_NODE:
-                        ++fromLog.structureSteps;
-                        break;
-                    case THESIS_LOG_PRIMITIVE:
-                        ++fromLog.primitiveTests;
-                        break;
-                    case THESIS_LOG_CLOSER_HIT:
+                    if (step.kind == THESIS_LOG_CLOSER_HIT) {
                         lastCloserHit = step.a;
                         lastCloserT = step.t;
-                        break;
-                    case THESIS_LOG_MIPMAP:
-                        ++fromLog.mipmapCells;
-                        if (step.f == 1) {
-                            ++fromLog.mipmapSkips;
-                            fromLog.skippedLevels |= 1u << step.a;
-                        }
-                        break;
-                    case THESIS_LOG_CELL:
-                        ++fromLog.cells;
-                        break;
-                    case THESIS_LOG_RUN:
-                        ++fromLog.runs;
-                        break;
-                    default:
-                        break;
                     }
                 }
                 CHECK(fromLog.structureSteps == work[ray].structureSteps);
@@ -489,6 +473,65 @@ TEST_CASE("the ray log of a ray agrees with its work counters and its hit", "[gp
                 }
             }
         }
+    }
+    CHECK(gpu::validationMessageCount() == validationBefore);
+}
+
+// The window draws the search structure and the steps of one ray from the diagram of the tracer
+// (ITracer::diagram), without knowing the tracer. The diagram must show a cut through the
+// structure, and it must describe every step through the structure that the ray log holds: one
+// walk step for each step that the work counters count.
+TEST_CASE("the diagram of a tracer describes its structure and every step of a ray", "[gpu][brick][diagram]")
+{
+    const gpu::Context context(tests::testContextOptions("Thesis diagram test"));
+    const std::uint64_t validationBefore = gpu::validationMessageCount();
+    const encoding::EncodingRegistry encodings = makeEncodings();
+    const workloads::CameraRays cameraRays(context, THESIS_DEFAULT_SHADER_DIR);
+    const tracing::RayBatch batch = tracing::RayBatch::create(context, 128, 96);
+
+    const voxel::VoxelModel model = voxel::voxelize(mesh::makeSphere({0.0f, 0.0f, 0.0f}, 1.0f, 48),
+                                                    {64, 16, voxel::VoxelizationRule::Conservative});
+    const core::Scene scene = encodings.create(encodings.defaultName())->encode(model).scene;
+    const tracing::GpuScene gpuScene = tracing::GpuScene::upload(context, scene);
+    const tests::HitFindingTracers set = tests::makeHitFindingTracers(context, gpuScene);
+    const core::CameraFrame camera = tests::cameraFrame(scene.bounds, {35.0f, 30.0f, 0.7f}, 4.0f / 3.0f);
+    const std::vector<core::Ray> rays = tests::generateRays(context, cameraRays, camera, batch);
+    const tracing::DiagramInput input{scene.primitiveBounds, scene.bounds, scene.primitiveGrid};
+
+    for (std::size_t t = 0; t < set.tracers.size(); ++t) {
+        INFO("tracer " << set.names[t]);
+        const tracing::ITracer& tracer = *set.tracers[t];
+        CHECK_FALSE(tracer.text().label.empty());
+        const auto diagram = tracer.diagram(input);
+        REQUIRE(diagram);
+
+        const float middle = 0.5f * (scene.bounds.lo.y + scene.bounds.hi.y);
+        const int detail = diagram->detail() ? diagram->detail()->initial : 0;
+        const tracing::StructureCut cut = diagram->cut(middle, detail);
+        CHECK_FALSE(cut.rects.empty());
+        CHECK_FALSE(cut.text.empty());
+        CHECK_FALSE(cut.legend.empty());
+        CHECK(diagram->walkText().stepName.empty() == !tracer.countsStructureSteps());
+
+        const std::uint32_t ray = batch.width * (batch.height / 2) + batch.width / 2;
+        std::vector<core::RayWork> work;
+        tracing::RayLog log;
+        (void)tests::traceRaysCounting(context, *set.tracers[t], batch, work, ray, &log);
+        REQUIRE_FALSE(log.steps.empty());
+        diagram->beginWalk();
+        std::uint32_t walkSteps = 0;
+        for (std::size_t i = 0; i < log.steps.size(); ++i) {
+            if (const auto step = diagram->walkStep(log.steps, i, rays[ray].origin, rays[ray].direction,
+                                                    std::numeric_limits<float>::infinity())) {
+                ++walkSteps;
+                CHECK_FALSE(step->label.empty());
+                CHECK_FALSE(step->boxes.empty());
+            }
+        }
+        if (tracer.countsStructureSteps())
+            CHECK(walkSteps == work[ray].structureSteps);
+        else
+            CHECK(walkSteps == 0);
     }
     CHECK(gpu::validationMessageCount() == validationBefore);
 }

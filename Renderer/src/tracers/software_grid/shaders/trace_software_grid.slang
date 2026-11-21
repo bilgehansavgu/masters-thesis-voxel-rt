@@ -12,6 +12,7 @@ import aabb;
 import closest;
 #include "thesis/shared/Bindings.h"
 #include "thesis/shared/RayLog.h"
+#include "thesis/tracers/software_grid/GridShared.h"
 
 struct TraceParams
 {
@@ -69,7 +70,8 @@ void main(uint3 threadId : SV_DispatchThreadID)
         const uint maxCells = gParams.gridSize.x + gParams.gridSize.y + gParams.gridSize.z;
         for (uint visited = 0; visited < maxCells; ++visited)
         {
-            closest.work.structureStep(THESIS_LOG_GRID_CELL, uint(cell.x), uint(cell.y), uint(cell.z), 0);
+            // Ray log structure step: a, b, c = the cell (x, y, z) (GridTracer::describeStructureStep).
+            closest.work.structureStep(uint(cell.x), uint(cell.y), uint(cell.z), 0);
             const uint index = uint(cell.x) + gParams.gridSize.x * (uint(cell.y) + gParams.gridSize.y * uint(cell.z));
             const uint end = gGridCells[index + 1];
             for (uint item = gGridCells[index]; item < end; ++item)

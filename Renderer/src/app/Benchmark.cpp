@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cstring>
 #include <format>
+#include <fstream>
 #include <optional>
 #include <thread>
 #include <utility>
@@ -70,9 +71,9 @@ double stageTime(const std::vector<gpu::StageTiming>& timings, std::string_view 
 // of the tracer's shader. That variant is slower, so this happens after the timed repeats and
 // takes no part in them.
 nlohmann::json measureRayWork(const gpu::Context& context, FramePipeline& pipeline, tracing::ITracer& tracer,
-                              const core::OrbitCamera& baseCamera)
+                              const core::OrbitCamera& baseCamera, bool fixedView)
 {
-    constexpr std::uint32_t kWorkViews = 8;
+    const std::uint32_t kWorkViews = fixedView ? 1u : 8u;
     const std::size_t count = pipeline.batch().count();
     std::vector<core::RayWork> work(count);
     std::vector<core::Hit> hits(count);
@@ -190,7 +191,12 @@ WarmupResult warmUp(RenderFrame&& renderFrame, std::uint32_t framesPerOrbit, dou
 
 } // namespace
 
-int runBenchmark(const Options& options)
+struct ReferenceFrame {
+    std::vector<std::byte> rays;
+    std::vector<std::byte> hits;
+};
+
+static int benchmark(const Options& options, ViewComparison* comparison = nullptr, ReferenceFrame* reference = nullptr)
 {
     gpu::ContextOptions contextOptions;
     contextOptions.applicationName = "Thesis Renderer (benchmark)";
@@ -208,8 +214,14 @@ int runBenchmark(const Options& options)
     const std::vector<std::string> tracerNames = selectTracers(registry, options.tracers);
     const tracing::TracerEnvironment environment{context, options.shaderDirectory};
 
-    FramePipeline pipeline(context, options.shaderDirectory, {options.width, options.height});
+    FramePipeline pipeline(context, options.shaderDirectory, {options.width, options.height},
+                           static_cast<tracing::RayOrder>(options.rayOrder));
     const core::OrbitCamera baseCamera = startCamera(options, scene.bounds);
+    if (options.fixedView) {
+        const std::span<const std::byte> rays =
+            reference ? std::span<const std::byte>(reference->rays) : std::span<const std::byte>();
+        pipeline.freezeRays(baseCamera.frame(pipeline.aspectRatio()), rays);
+    }
     const std::uint64_t rayCount = pipeline.batch().count();
     const std::string stamp = fileTimestamp();
 
@@ -224,8 +236,10 @@ int runBenchmark(const Options& options)
     std::printf("Protocol: warm-up %.0f-%.0f s until the GPU clock and the trace time settle, then %u repeats x %u "
                 "frames\n",
                 options.warmupSeconds, options.warmupMaxSeconds, options.repeats, options.frames);
-    std::printf("Camera: orbit from yaw %.0f, pitch %.0f, at %.2f x the distance that shows the whole scene\n\n",
-                options.camera.at(0), options.camera.at(1), options.camera.at(2));
+    std::printf("Camera: %s, yaw %.2f, pitch %.2f, distance %.4g\n", options.fixedView ? "fixed" : "orbit",
+                baseCamera.yawDegrees, baseCamera.pitchDegrees, baseCamera.distance);
+    if (comparison)
+        comparison->camera = baseCamera;
     std::printf("%-16s %10s %10s %10s %8s %10s %10s %9s %8s\n", "tracer", "median ms", "min ms", "max ms", "spread %",
                 "Mrays/s", "clock MHz", "warm-up s", "settled");
 
@@ -240,6 +254,8 @@ int runBenchmark(const Options& options)
         }
 
         const auto tracer = registry.create(tracerName, environment);
+        if (comparison && !tracer->findsHits())
+            throw std::invalid_argument("Choose one surface tracer for each comparison condition");
         tracing::PrepareReport prepared;
         try {
             prepared = tracer->prepare(gpuScene);
@@ -266,19 +282,31 @@ int runBenchmark(const Options& options)
                         {"encode_seconds", built.encodeSeconds},
                         {"memory", built.memory.toJson(built.voxels)},
                         {"statistics", built.statistics}};
-        run["config"] = {{"width", options.width},
-                         {"height", options.height},
-                         {"rays_per_frame", rayCount},
-                         {"warmup_min_seconds", options.warmupSeconds},
-                         {"warmup_max_seconds", options.warmupMaxSeconds},
-                         {"frames_per_repeat", options.frames},
-                         {"repeats", options.repeats},
-                         {"camera_path", "orbit, 360 degrees per repeat"},
-                         {"camera_start",
-                          {{"yaw_degrees", options.camera.at(0)},
-                           {"pitch_degrees", options.camera.at(1)},
-                           {"distance_factor", options.camera.at(2)}}},
-                         {"validation", options.validation}};
+        run["config"] = {
+            {"width", options.width},
+            {"height", options.height},
+            {"rays_per_frame", rayCount},
+            {"ray_order", options.rayOrder == THESIS_RAY_ORDER_TILES ? "tiles" : "rows"},
+            {"warmup_min_seconds", options.warmupSeconds},
+            {"warmup_max_seconds", options.warmupMaxSeconds},
+            {"frames_per_repeat", options.frames},
+            {"repeats", options.repeats},
+            {"camera_path", options.fixedView ? "fixed" : "orbit, 360 degrees per repeat"},
+            {"camera_start",
+             {{"yaw_degrees", baseCamera.yawDegrees},
+              {"pitch_degrees", baseCamera.pitchDegrees},
+              {"distance_factor", baseCamera.distance / core::OrbitCamera::framing(scene.bounds).distance}}},
+            {"validation", options.validation}};
+        run["config"]["ray_workload"] =
+            options.fixedView ? "fixed ray buffer, generated once" : "camera rays generated each frame";
+        run["config"]["pose"] = {{"target", {baseCamera.target.x, baseCamera.target.y, baseCamera.target.z}},
+                                 {"distance", baseCamera.distance},
+                                 {"yaw", baseCamera.yawDegrees},
+                                 {"pitch", baseCamera.pitchDegrees},
+                                 {"fov", baseCamera.verticalFovDegrees}};
+        run["scene"]["model_path"] = options.model.empty() ? "" : std::filesystem::absolute(options.model).string();
+        run["scene"]["grid_size"] = options.gridSize;
+        run["scene"]["seed"] = options.seed;
         run["prepare"] = {{"gpu_ms", prepared.gpuMilliseconds},
                           {"cpu_ms", prepared.cpuMilliseconds},
                           {"memory_bytes", prepared.memoryBytes},
@@ -290,7 +318,8 @@ int runBenchmark(const Options& options)
                                {"process_device_local", context.deviceLocalUsage()}};
         const auto renderFrame = [&](std::uint32_t frame) {
             THESIS_ZONE("benchmark frame");
-            const core::CameraFrame camera = cameraAt(baseCamera, frame, options.frames, pipeline.aspectRatio());
+            const core::CameraFrame camera =
+                cameraAt(baseCamera, options.fixedView ? 0u : frame, options.frames, pipeline.aspectRatio());
             context.submitAndWait([&](VkCommandBuffer cmd) {
                 pipeline.begin(cmd);
                 pipeline.trace(cmd, *tracer, camera);
@@ -308,7 +337,8 @@ int runBenchmark(const Options& options)
                          {"clock_settled", warmup.clockStable},
                          {"graphics_clock_mhz", warmup.clockMhz ? nlohmann::json(*warmup.clockMhz) : nlohmann::json()},
                          {"trace_settled", warmup.traceStable},
-                         {"trace_ms_median_of_each_orbit", warmup.orbitMedians}};
+                         {options.fixedView ? "trace_ms_median_of_each_batch" : "trace_ms_median_of_each_orbit",
+                          warmup.orbitMedians}};
         run["system_after_warmup"] = metrics::captureSystemState();
 
         metrics::TracySink tracySink;
@@ -360,10 +390,54 @@ int runBenchmark(const Options& options)
         summary["graphics_clock_mhz_after_each_repeat"] = repeatClocks;
         summary["gpu_after_each_repeat"] = repeatGpuStates;
         summary["system_after"] = metrics::captureSystemState();
+        if (comparison) {
+            auto rays = gpu::downloadBuffer(context, pipeline.batch().rays);
+            if (reference->rays.empty())
+                reference->rays = std::move(rays);
+            else if (reference->rays != rays)
+                throw std::runtime_error("The two runs generated different camera rays. Comparison invalid.");
+            const auto hits = gpu::downloadBuffer(context, pipeline.batch().hits);
+            if (reference->hits.empty())
+                reference->hits = hits;
+            else {
+                if (hits.size() != reference->hits.size())
+                    throw std::runtime_error("Hit buffer sizes differ");
+                const auto asHits = [rayCount](const std::vector<std::byte>& bytes) {
+                    return std::span<const core::Hit>(reinterpret_cast<const core::Hit*>(bytes.data()), rayCount);
+                };
+                const core::HitComparison& same = comparison->hits =
+                    core::compareHits(asHits(reference->hits), asHits(hits));
+                summary["hit_comparison"] = {{"input_rays_verified_identical", true},
+                                             {"rule", "agreement test: relative distance tolerance"},
+                                             {"relative_tolerance", core::HitComparison::kRelativeTolerance},
+                                             {"agrees", same.agrees()},
+                                             {"rays", same.rays},
+                                             {"both_miss", same.bothMiss},
+                                             {"both_hit", same.bothHit},
+                                             {"hit_vs_miss", same.hitVersusMiss},
+                                             {"distance_mismatch", same.distanceMismatch},
+                                             {"face_mismatch", same.faceMismatch},
+                                             {"touching_primitive", same.primitiveMismatch},
+                                             {"touching_attributes", same.attributeMismatch},
+                                             {"max_relative_distance_error", same.maxRelativeDistanceError},
+                                             {"reference_report", comparison->rows.front().file.filename().string()}};
+            }
+        }
         if (tracer->countsWork()) {
-            summary["ray_work"] = measureRayWork(context, pipeline, *tracer, baseCamera);
+            summary["ray_work"] = measureRayWork(context, pipeline, *tracer, baseCamera, options.fixedView);
+            if (!tracer->countsStructureSteps()) {
+                for (const char* group : {"mean_per_ray", "mean_per_ray_with_hit", "max_per_ray"})
+                    summary["ray_work"][group]["structure_steps"] = nullptr;
+            }
         }
         sinks.endRun(summary);
+        if (comparison) {
+            const auto& mean = summary.at("ray_work").at("mean_per_ray");
+            comparison->rows.push_back({tracerName, built.encoding, fileSink.path(), medianMs, spreadPercent,
+                                        mean.at("cells").get<double>(), mean.at("mipmap_skips").get<double>(),
+                                        warmup.traceStable && (warmup.clockStable || !warmup.clockMhz),
+                                        gpuScene.memoryBytes(), tracer->memoryBytes()});
+        }
 
         const std::string clockText = warmup.clockMhz ? std::to_string(*warmup.clockMhz) : "n/a";
         // "settled" is about the warm-up: the GPU clock and the trace time were steady when it ended.
@@ -373,12 +447,15 @@ int runBenchmark(const Options& options)
         if (summary.contains("ray_work")) {
             const nlohmann::json& work = summary["ray_work"];
             const nlohmann::json& mean = work["mean_per_ray_with_hit"];
-            std::printf("           %.1f %% of the rays hit; a ray that hits: %.2f structure steps, %.2f primitive "
+            std::printf("           %.1f %% of the rays hit; a ray that hits: %s structure steps, %.2f primitive "
                         "tests, %.2f mipmap cells (%.2f skipped), %.2f cells, %.2f runs\n",
                         100.0 * work["rays_with_hit"].get<double>() / work["rays"].get<double>(),
-                        mean["structure_steps"].get<double>(), mean["primitive_tests"].get<double>(),
-                        mean["mipmap_cells"].get<double>(), mean["mipmap_skips"].get<double>(),
-                        mean["cells"].get<double>(), mean["runs"].get<double>());
+                        (mean["structure_steps"].is_null()
+                             ? std::string("unavailable")
+                             : std::format("{:.2f}", mean["structure_steps"].get<double>()))
+                            .c_str(),
+                        mean["primitive_tests"].get<double>(), mean["mipmap_cells"].get<double>(),
+                        mean["mipmap_skips"].get<double>(), mean["cells"].get<double>(), mean["runs"].get<double>());
         }
         for (const gpu::ShaderStatistic& statistic : prepared.shaderStatistics) {
             if (statistic.name == "Register Count") {
@@ -410,4 +487,88 @@ int runBenchmark(const Options& options)
     return 0;
 }
 
+int runBenchmark(const Options& options)
+{
+    return benchmark(options);
+}
+
+ViewComparison compareView(Options options, const std::string& secondTracer)
+{
+    options.fixedView = true;
+    if (options.tracers.empty())
+        options.tracers = {makeTracerRegistry().defaultName()};
+    if (options.tracers.size() != 1)
+        throw std::invalid_argument("Choose one surface tracer for each comparison condition");
+    // Skipping off / on: the same bricks in the encoding without skipping, then in its twin.
+    std::string skippingOn;
+    if (secondTracer.empty()) {
+        if (options.model.empty())
+            throw std::invalid_argument("Skipping requires a voxel model");
+        const encoding::EncodingRegistry encodings = makeEncodingRegistry();
+        if (options.encoding.empty())
+            options.encoding = encodings.defaultName();
+        const auto chosen = encodings.create(options.encoding);
+        if (chosen->skippingTwin().empty())
+            throw std::invalid_argument("Encoding '" + options.encoding + "' has no variant with skipping switched");
+        skippingOn = chosen->skipsEmptySpace() ? options.encoding : chosen->skippingTwin();
+        if (chosen->skipsEmptySpace())
+            options.encoding = chosen->skippingTwin();
+    } else if (secondTracer == options.tracers.front())
+        throw std::invalid_argument("Choose two different tracers");
+    // A directory per pair keeps repeated runs independently replayable.
+    const auto root = options.outputDirectory;
+    std::filesystem::create_directories(root);
+    const auto stem = fileTimestamp() + "_fixed";
+    for (unsigned i = 0;; ++i) {
+        options.outputDirectory = root / (i == 0 ? stem : stem + "_" + std::to_string(i));
+        if (std::filesystem::create_directory(options.outputDirectory))
+            break;
+    }
+    ViewComparison result;
+    ReferenceFrame referenceHits;
+    if (benchmark(options, &result, &referenceHits))
+        throw std::runtime_error("Validation failed in the first run");
+    options.exactCamera = result.camera;
+    if (secondTracer.empty())
+        options.encoding = skippingOn;
+    else
+        options.tracers = {secondTracer};
+    if (options.cooldownSeconds > 0)
+        std::this_thread::sleep_for(std::chrono::duration<double>(options.cooldownSeconds));
+    if (benchmark(options, &result, &referenceHits))
+        throw std::runtime_error("Validation failed in the second run");
+    std::printf("Fixed view: %zu of %zu rays disagree beyond rounding (%s).\n", result.hits.disagreements(),
+                result.hits.rays, result.hits.agrees() ? "agree" : "DISAGREE");
+    return result;
+}
+
+void restoreResult(Options& options)
+{
+    std::ifstream input(options.openResult);
+    const auto report = nlohmann::json::parse(input);
+    const auto& run = report.at("run");
+    const auto& config = run.at("config");
+    if (config.at("camera_path") != "fixed")
+        throw std::invalid_argument("Choose a fixed-view result");
+    const auto& pose = config.at("pose");
+    const auto& target = pose.at("target");
+    core::OrbitCamera camera;
+    camera.target = {target.at(0).get<float>(), target.at(1).get<float>(), target.at(2).get<float>()};
+    camera.yawDegrees = pose.at("yaw");
+    camera.pitchDegrees = pose.at("pitch");
+    camera.distance = pose.at("distance");
+    camera.verticalFovDegrees = pose.at("fov");
+    options.exactCamera = camera;
+    options.fixedView = true;
+    options.width = config.at("width");
+    options.height = config.at("height");
+    const auto& scene = run.at("scene");
+    options.model = scene.at("model_path").get<std::string>();
+    options.boxExample = options.model.empty();
+    options.seed = scene.at("seed");
+    options.gridSize = scene.at("grid_size");
+    options.encoding = scene.at("encoding");
+    options.brickSize = scene.at("brick_size");
+    options.tracers = {run.at("tracer").get<std::string>()};
+}
 } // namespace thesis::app

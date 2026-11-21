@@ -1,5 +1,7 @@
 #pragma once
 
+// Side: GPU
+
 #include <vk_mem_alloc.h>
 #include <vulkan/vulkan.h>
 

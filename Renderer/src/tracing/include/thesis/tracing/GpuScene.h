@@ -1,5 +1,7 @@
 #pragma once
 
+// Side: GPU
+
 #include "thesis/core/Scene.h"
 #include "thesis/gpu/Buffer.h"
 #include "thesis/gpu/ComputeKernel.h"

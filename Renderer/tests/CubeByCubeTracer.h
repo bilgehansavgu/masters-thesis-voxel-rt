@@ -1,5 +1,7 @@
 #pragma once
 
+// Side: CPU
+
 #include "thesis/core/GpuTypes.h"
 #include "thesis/voxel/VoxelModel.h"
 

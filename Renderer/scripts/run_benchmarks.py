@@ -43,11 +43,13 @@ COLUMNS = [
     ("encoding", lambda r: r["encoding"]),
     ("brick", lambda r: r["brick_size"]),
     ("orbit", lambda r: r["orbit"]),
+    ("ray order", lambda r: r.get("ray_order", "")),
     ("tracer", lambda r: r["tracer"]),
     ("trace ms", lambda r: fixed(r.get("trace_ms"), 3)),
     ("above null ms", lambda r: fixed(r.get("above_null_ms"), 3)),
     ("spread %", lambda r: fixed(r.get("spread_percent"), 1)),
     ("Mrays/s", lambda r: fixed(r.get("mrays_per_second"), 0)),
+    ("hit %", lambda r: fixed(r.get("hit_percent"), 1)),
     ("structure steps", lambda r: fixed(r.get("structure_steps"), 2)),
     ("brick tests", lambda r: fixed(r.get("primitive_tests"), 2)),
     ("mipmap cells", lambda r: fixed(r.get("mipmap_cells"), 2)),
@@ -73,21 +75,26 @@ def mib(value):
 
 
 def case_id(case):
-    return f"{case['model_name']}_{case['encoding']}_b{case['brick_size']}_{case['orbit']}"
+    # The orbit stays the last part: row_of reads it from there.
+    return f"{case['model_name']}_{case['encoding']}_b{case['brick_size']}_{case['ray_order']}_{case['orbit']}"
 
 
 def cases_of(plan):
-    """The cases of a plan: every model x every orbit x every configuration."""
+    """The cases of a plan: every model x every orbit x every configuration x every ray order.
+    `ray_orders` is optional (default: rows only). The ray orders of one scene run one after the
+    other, so a change of the machine's state between them stays small."""
     cases = []
     for model in plan["models"]:
         for orbit, camera in plan["orbits"].items():
             for configuration in plan["configurations"]:
-                cases.append({"model": model,
-                              "model_name": pathlib.Path(model).stem,
-                              "orbit": orbit,
-                              "camera": camera,
-                              "encoding": configuration["encoding"],
-                              "brick_size": configuration["brick_size"]})
+                for ray_order in plan.get("ray_orders", ["rows"]):
+                    cases.append({"model": model,
+                                  "model_name": pathlib.Path(model).stem,
+                                  "orbit": orbit,
+                                  "camera": camera,
+                                  "ray_order": ray_order,
+                                  "encoding": configuration["encoding"],
+                                  "brick_size": configuration["brick_size"]})
     return cases
 
 
@@ -95,7 +102,7 @@ def run_benchmark(case, tracers, incoming, extra):
     """Runs the benchmark for one case. Returns its console output."""
     command = [str(RENDERER), "--benchmark", "--model", case["model"], "--encoding", case["encoding"],
                "--brick-size", str(case["brick_size"]), "--camera", *[str(v) for v in case["camera"]],
-               "--output", str(incoming), *extra]
+               "--ray-order", case.get("ray_order", "rows"), "--output", str(incoming), *extra]
     if tracers:
         command += ["--tracer", *tracers]
     done = subprocess.run(command, capture_output=True, text=True)
@@ -107,6 +114,18 @@ def run_benchmark(case, tracers, incoming, extra):
 def spread_of(path):
     with open(path, encoding="utf-8") as file:
         return json.load(file)["summary"]["trace_ms"]["spread_between_repeats_percent"]
+
+
+def warmup_settled(path):
+    """True when the GPU clock and the trace time were steady at the end of the warm-up."""
+    with open(path, encoding="utf-8") as file:
+        return settled(json.load(file)["run"]["warmup"])
+
+
+def settled(warmup):
+    """A GPU without a clock reading counts as clock-settled, as in the renderer."""
+    clock = warmup["clock_settled"] or warmup.get("graphics_clock_mhz") is None
+    return bool(clock and warmup["trace_settled"])
 
 
 def run_case(case, folder, attempts, extra):
@@ -125,11 +144,16 @@ def run_case(case, folder, attempts, extra):
                 tracer = json.load(file)["run"]["tracer"]
             target = folder / f"{name}_{tracer}.json"
             spread = spread_of(path)
-            if spread > SPREAD_LIMIT_PERCENT and attempt < attempts:
+            steady = warmup_settled(path)
+            if (spread > SPREAD_LIMIT_PERCENT or not steady) and attempt < attempts:
                 rejected.mkdir(exist_ok=True)
                 shutil.move(str(path), str(rejected / f"{name}_{tracer}_attempt{attempt}.json"))
                 again.append(tracer)
-                print(f"    {tracer}: spread {spread:.1f} % is above {SPREAD_LIMIT_PERCENT:.0f} %, runs again")
+                if spread > SPREAD_LIMIT_PERCENT:
+                    reason = f"spread {spread:.1f} % is above {SPREAD_LIMIT_PERCENT:.0f} %"
+                else:
+                    reason = "warm-up did not settle"
+                print(f"    {tracer}: {reason}, runs again")
             else:
                 shutil.move(str(path), str(target))
                 (folder / f"{name}_{tracer}.attempts").write_text(str(attempt), encoding="utf-8")
@@ -154,6 +178,7 @@ def row_of(path):
         "encoding": scene["encoding"],
         "brick_size": scene["brick_size"],
         "orbit": orbit,
+        "ray_order": run["config"].get("ray_order", "rows"),
         "tracer": tracer,
         "trace_ms": summary["trace_ms"]["median_of_repeat_medians"],
         "spread_percent": summary["trace_ms"]["spread_between_repeats_percent"],
@@ -181,8 +206,8 @@ def row_of(path):
         notes.append(f"attempt {attempts.read_text(encoding='utf-8')}")
     if row["spread_percent"] > SPREAD_LIMIT_PERCENT:
         notes.append(f"SPREAD ABOVE {SPREAD_LIMIT_PERCENT:.0f} %")
-    if not (run["warmup"]["clock_settled"] and run["warmup"]["trace_settled"]):
-        notes.append("warm-up not settled")
+    if not settled(run["warmup"]):
+        notes.append("WARM-UP NOT SETTLED")
     row["note"] = ", ".join(notes)
     return row
 
@@ -199,7 +224,8 @@ def skipped_rows(folder):
             if len(parts) == 3 and parts[1] == "skipped:" and parts[0] not in seen:
                 seen.add(parts[0])
                 rows.append({"model": case["model_name"], "encoding": case["encoding"],
-                             "brick_size": case["brick_size"], "orbit": case["orbit"], "tracer": parts[0],
+                             "brick_size": case["brick_size"], "orbit": case["orbit"],
+                             "ray_order": case.get("ray_order", "rows"), "tracer": parts[0],
                              "note": "skipped: " + parts[2]})
     return rows
 
@@ -210,16 +236,19 @@ def write_table(folder):
     if not rows:
         sys.exit(f"{folder}: no results files")
     # The time above the null tracer of the same case.
-    floor = {(r["model"], r["encoding"], r["brick_size"], r["orbit"]): r["trace_ms"]
-             for r in rows if r["tracer"] == "null"}
+    def scene_of(r):
+        return r["model"], r["encoding"], r["brick_size"], r["orbit"], r.get("ray_order", "rows")
+
+    floor = {scene_of(r): r["trace_ms"] for r in rows if r["tracer"] == "null"}
     for row in rows:
-        null_ms = floor.get((row["model"], row["encoding"], row["brick_size"], row["orbit"]))
+        null_ms = floor.get(scene_of(row))
         if null_ms is not None and row["tracer"] != "null":
             row["above_null_ms"] = row["trace_ms"] - null_ms
     commits = sorted({row["commit"] for row in rows})
     devices = sorted({row["device"] for row in rows})
     rows += skipped_rows(folder)
-    rows.sort(key=lambda r: (r["model"], r["orbit"], r["brick_size"], r["encoding"], r["tracer"]))
+    rows.sort(key=lambda r: (r["model"], r["orbit"], r["brick_size"], r["encoding"], r.get("ray_order", "rows"),
+                             r["tracer"]))
 
     headings = [heading for heading, _ in COLUMNS]
     lines = [[str(value(row)) for _, value in COLUMNS] for row in rows]
@@ -233,7 +262,7 @@ def write_table(folder):
         file.write(f"# Benchmark table of `{folder.name}`\n\n")
         file.write(f"Commit: {', '.join(commits)}. Machine: {', '.join(devices)}.\n\n")
         file.write("`trace ms` is the median of the repeat medians. `above null ms` is that time minus the time "
-                   "of the null tracer on the same scene. The work columns (`structure steps` to `runs`) are means "
+                   "of the null tracer on the same scene: a hint only, not the cost of the search (README, rule 5). The work columns (`structure steps` to `runs`) are means "
                    "for a ray that hits, from the counting variant of the shader. `build ms` is CPU plus GPU time "
                    "of the search structure.\n\n")
         if flagged:

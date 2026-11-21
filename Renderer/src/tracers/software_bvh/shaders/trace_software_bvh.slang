@@ -13,7 +13,7 @@ import aabb;
 import closest;
 #include "thesis/shared/Bindings.h"
 #include "thesis/shared/RayLog.h"
-#include "thesis/shared/Bvh.h"
+#include "thesis/tracers/software_bvh/BvhShared.h"
 
 // CPU mirror: tracers::BvhNode in Bvh.h.
 struct BvhNode
@@ -59,7 +59,8 @@ void main(uint3 threadId : SV_DispatchThreadID)
     stackNode[0] = 0;
     stackEntry[0] = kNever;
 
-    closest.work.structureStep(THESIS_LOG_BVH_NODE, 0, 0, 0, 0);
+    // Ray log structure step: a = the index of the node (BvhTracer::describeStructureStep).
+    closest.work.structureStep(0, 0, 0, 0);
     BvhNode node = gBvhNodes[0];
     bool walking = boxEntry(ray.origin, inverseDirection, node.lo, node.hi, ray.tMin, closest.t) < kNever;
 
@@ -73,8 +74,8 @@ void main(uint3 threadId : SV_DispatchThreadID)
         }
         else
         {
-            closest.work.structureStep(THESIS_LOG_BVH_NODE, node.child, 0, 0, 0);
-            closest.work.structureStep(THESIS_LOG_BVH_NODE, node.child + 1, 0, 0, 0);
+            closest.work.structureStep(node.child, 0, 0, 0);
+            closest.work.structureStep(node.child + 1, 0, 0, 0);
             const BvhNode first = gBvhNodes[node.child];
             const BvhNode second = gBvhNodes[node.child + 1];
             const float entryFirst = boxEntry(ray.origin, inverseDirection, first.lo, first.hi, ray.tMin, closest.t);
@@ -111,7 +112,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
                 // A box that begins behind the closest hit cannot hold a closer one.
                 if (stackEntry[stackSize] < closest.t)
                 {
-                    closest.work.structureStep(THESIS_LOG_BVH_NODE, stackNode[stackSize], 0, 0, 0);
+                    closest.work.structureStep(stackNode[stackSize], 0, 0, 0);
                     node = gBvhNodes[stackNode[stackSize]];
                     walking = true;
                     break;

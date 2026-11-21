@@ -16,7 +16,7 @@ struct CameraParams {
     glm::vec4 up;
     std::uint32_t width;
     std::uint32_t height;
-    std::uint32_t pad0;
+    std::uint32_t rayOrder; // tracing::RayOrder
     std::uint32_t pad1;
 };
 static_assert(sizeof(CameraParams) == 80);
@@ -37,7 +37,7 @@ void CameraRays::generate(VkCommandBuffer cmd, const core::CameraFrame& camera, 
                               glm::vec4(camera.up, 0.0f),
                               batch.width,
                               batch.height,
-                              0,
+                              static_cast<std::uint32_t>(batch.order),
                               0};
     gpu::KernelResources resources;
     resources.buffer(tracing::kRayBinding, batch.rays);

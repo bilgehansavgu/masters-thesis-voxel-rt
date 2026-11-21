@@ -1,7 +1,9 @@
-// Ray workload: one primary ray per pixel from a pinhole camera, written row-major.
+// Ray workload: one primary ray per pixel from a pinhole camera, written in the ray order of the
+// batch (thesis/shared/RayOrder.h).
 
 import types;
 #include "thesis/shared/Bindings.h"
+#include "thesis/shared/RayOrder.h"
 
 struct CameraParams
 {
@@ -11,7 +13,7 @@ struct CameraParams
     float4 up;     // scaled likewise
     uint width;
     uint height;
-    uint pad0;
+    uint rayOrder; // THESIS_RAY_ORDER_*
     uint pad1;
 };
 
@@ -34,5 +36,5 @@ void main(uint3 threadId : SV_DispatchThreadID)
     ray.tMin = 0.0;
     ray.direction = normalize(gCamera.forward.xyz + ndc.x * gCamera.right.xyz - ndc.y * gCamera.up.xyz);
     ray.tMax = 1.0e30;
-    gRays[threadId.y * gCamera.width + threadId.x] = ray;
+    gRays[THESIS_RAY_INDEX(gCamera.rayOrder, threadId.x, threadId.y, gCamera.width, gCamera.height)] = ray;
 }

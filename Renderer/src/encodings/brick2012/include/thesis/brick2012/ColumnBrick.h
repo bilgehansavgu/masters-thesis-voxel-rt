@@ -1,5 +1,7 @@
 #pragma once
 
+// Side: CPU
+
 #include "thesis/voxel/VoxelModel.h"
 
 #include <glm/vec3.hpp>

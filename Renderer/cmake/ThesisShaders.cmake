@@ -4,6 +4,8 @@
 # import the shared modules in shaders/common/. Tracer shaders are compiled once per primitive
 # kind: the kind's folder is put on the search path, so `import primitive;` resolves to that kind.
 # This is how an encoding plugs into every tracer without the tracer's code changing.
+# The include/ folder of the calling library is on the search path too, so a plugin keeps the
+# numbers its C++ and its shader share in its own folder (<Name>Shared.h), not in shared/.
 
 find_program(SLANGC_EXECUTABLE slangc
     HINTS "$ENV{VULKAN_SDK}/Bin" "$ENV{VULKAN_SDK}/bin"
@@ -31,6 +33,11 @@ function(thesis_add_shaders)
               -warnings-as-errors all
               -I "${THESIS_SHADER_ROOT}/common"
               -I "${THESIS_SHARED_INCLUDE_DIR}")
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/include")
+        file(GLOB_RECURSE own_headers CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/include/*.h")
+        list(APPEND shared_modules ${own_headers})
+        list(APPEND flags -I "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    endif()
     foreach(capability IN LISTS ARG_CAPABILITIES)
         list(APPEND flags -capability ${capability})
     endforeach()

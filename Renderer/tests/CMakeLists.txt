@@ -7,9 +7,11 @@ add_executable(thesis_tests
     HitComparison.h
     TestAgreement.cpp
     TestBrickTracing.cpp
+    TestColorScale.cpp
     TestCore.cpp
     TestEncodings.cpp
     TestNormals.cpp
+    TestRayOrder.cpp
     TestSearchStructures.cpp
     TestShaderLayouts.cpp
     TestVoxel.cpp
@@ -21,6 +23,7 @@ target_link_libraries(thesis_tests PRIVATE
     thesis::gpu
     thesis::tracing
     thesis::workloads
+    thesis::resolve
     thesis::tracer_plugins
     thesis::tracer_software_grid
     thesis::tracer_software_octree

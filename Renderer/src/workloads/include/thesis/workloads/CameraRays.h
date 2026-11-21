@@ -1,5 +1,7 @@
 #pragma once
 
+// Side: GPU
+
 #include "thesis/core/Camera.h"
 #include "thesis/gpu/ComputeKernel.h"
 #include "thesis/tracing/RayBatch.h"

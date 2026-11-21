@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <filesystem>
 
 namespace thesis::app {
 
@@ -29,6 +30,21 @@ Gui::Gui(const gpu::Context& context, const Window& window, VkFormat targetForma
     ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
     ImGui::StyleColorsDark();
+    auto& style = ImGui::GetStyle();
+    style.WindowPadding = {14, 12};
+    style.ItemSpacing = {8, 7};
+    style.FramePadding = {8, 4};
+    style.WindowRounding = 8;
+    style.FrameRounding = 4;
+    style.Colors[ImGuiCol_WindowBg] = {0.07f, 0.10f, 0.13f, 0.98f};
+    style.Colors[ImGuiCol_TextDisabled] = {0.68f, 0.73f, 0.77f, 1};
+    style.Colors[ImGuiCol_TitleBgActive] = {0.09f, 0.19f, 0.21f, 1};
+    style.Colors[ImGuiCol_Button] = {0.10f, 0.34f, 0.37f, 1};
+    style.Colors[ImGuiCol_ButtonHovered] = {0.13f, 0.44f, 0.47f, 1};
+    // Use the system UI face where available; the embedded face also works on other installations.
+    if (std::filesystem::is_regular_file(kInterfaceFontFile)) {
+        ImGui::GetIO().Fonts->AddFontFromFileTTF(kInterfaceFontFile, 17.0f);
+    }
     ImGui_ImplGlfw_InitForVulkan(window.handle(), true);
 
     ImGui_ImplVulkan_InitInfo info{};

@@ -52,6 +52,20 @@ TEST_CASE("registry creates by name and rejects duplicates", "[core]")
     CHECK_THROWS(registry.add("square", "again", [] { return std::make_unique<Square>(); }));
 }
 
+TEST_CASE("registry names its default, or else the first plugin", "[core]")
+{
+    struct Shape {
+        virtual ~Shape() = default;
+    };
+    core::Registry<Shape> registry;
+    CHECK_THROWS(registry.defaultName());
+    registry.add("square", "", [] { return std::make_unique<Shape>(); });
+    CHECK(registry.defaultName() == "square");
+    registry.add("circle", "", [] { return std::make_unique<Shape>(); }, core::Pick::Default);
+    CHECK(registry.defaultName() == "circle");
+    CHECK_THROWS(registry.add("line", "", [] { return std::make_unique<Shape>(); }, core::Pick::Default));
+}
+
 TEST_CASE("box field is deterministic and boxes do not overlap", "[core]")
 {
     const core::Scene a = core::makeBoxField({});
@@ -88,6 +102,32 @@ TEST_CASE("orbit camera looks at its target with an orthogonal frame", "[core]")
     CHECK(glm::length(frame.right) / glm::length(frame.up) == Catch::Approx(16.0f / 9.0f));
     const glm::vec3 toTarget = glm::normalize(camera.target - frame.origin);
     CHECK(glm::dot(toTarget, frame.forward) == Catch::Approx(1.0f));
+}
+
+TEST_CASE("flying camera turns in place and moves along its view", "[core]")
+{
+    core::OrbitCamera camera;
+    camera.target = {1.0f, 2.0f, 3.0f};
+    const glm::vec3 eyeBefore = camera.eye();
+
+    camera.turnInPlace(40.0f, -25.0f);
+    CHECK(glm::length(camera.eye() - eyeBefore) == Catch::Approx(0.0f).margin(1e-4));
+    CHECK(glm::length(camera.target - camera.eye()) == Catch::Approx(camera.distance));
+
+    camera.turnInPlace(0.0f, 500.0f);
+    CHECK(camera.pitchDegrees == Catch::Approx(89.0f));
+
+    const core::CameraFrame before = camera.frame(1.0f);
+    camera.fly(2.0f, 0.0f, 0.0f);
+    const glm::vec3 moved = camera.frame(1.0f).origin - before.origin;
+    CHECK(glm::length(moved) == Catch::Approx(2.0f));
+    CHECK(glm::dot(glm::normalize(moved), before.forward) == Catch::Approx(1.0f));
+
+    const glm::vec3 eyeBeforeSide = camera.eye();
+    camera.fly(0.0f, 1.0f, 3.0f);
+    const glm::vec3 side = camera.eye() - eyeBeforeSide;
+    CHECK(side.y == Catch::Approx(3.0f));
+    CHECK(glm::dot(side, before.forward) == Catch::Approx(3.0f * before.forward.y).margin(1e-4));
 }
 
 TEST_CASE("hit comparison classifies disagreements", "[core]")

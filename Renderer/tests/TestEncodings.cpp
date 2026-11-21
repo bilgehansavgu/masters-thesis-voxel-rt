@@ -184,8 +184,10 @@ TEST_CASE("the min/max mipmap holds the lowest and the highest voxel of each squ
     };
 
     std::size_t encodingsWithMipmap = 0;
+    std::size_t expectedWithMipmap = 0;
     for (const std::string& name : registry.names()) {
         const auto encoder = registry.create(name);
+        expectedWithMipmap += encoder->skipsEmptySpace() ? models.size() : 0;
         for (const NamedModel& input : models) {
             INFO(name << " on " << input.name);
             const core::Scene scene = encoder->encode(input.model).scene;
@@ -193,7 +195,7 @@ TEST_CASE("the min/max mipmap holds the lowest and the highest voxel of each squ
             brick2012::BrickModelHeader header;
             std::memcpy(&header, bytesAt(scene, THESIS_BINDING_BRICK_HEADER)->data(), sizeof(header));
             const std::uint32_t n = header.brickSize;
-            const bool hasMipmap = name.ends_with("_mip");
+            const bool hasMipmap = encoder->skipsEmptySpace();
             if (!hasMipmap) {
                 CHECK(mipmap == nullptr);
                 CHECK(header.mipmapLevels == 0);
@@ -241,7 +243,8 @@ TEST_CASE("the min/max mipmap holds the lowest and the highest voxel of each squ
             ++encodingsWithMipmap;
         }
     }
-    CHECK(encodingsWithMipmap == 2 * models.size());
+    CHECK(expectedWithMipmap > 0);
+    CHECK(encodingsWithMipmap == expectedWithMipmap);
 }
 
 TEST_CASE("columns along each axis give back the brick", "[encoding]")

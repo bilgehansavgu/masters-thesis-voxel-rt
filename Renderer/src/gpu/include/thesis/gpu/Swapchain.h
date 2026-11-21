@@ -1,5 +1,7 @@
 #pragma once
 
+// Side: GPU
+
 #include <VkBootstrap.h>
 #include <vulkan/vulkan.h>
 

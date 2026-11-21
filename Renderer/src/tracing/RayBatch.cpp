@@ -6,7 +6,7 @@
 
 namespace thesis::tracing {
 
-RayBatch RayBatch::create(const gpu::Context& context, std::uint32_t width, std::uint32_t height)
+RayBatch RayBatch::create(const gpu::Context& context, std::uint32_t width, std::uint32_t height, RayOrder order)
 {
     if (width == 0 || height == 0) {
         throw std::invalid_argument("RayBatch: width and height must be positive");
@@ -14,6 +14,7 @@ RayBatch RayBatch::create(const gpu::Context& context, std::uint32_t width, std:
     RayBatch batch;
     batch.width = width;
     batch.height = height;
+    batch.order = order;
     const VkDeviceSize count = static_cast<VkDeviceSize>(width) * height;
     batch.rays = gpu::Buffer(context, count * sizeof(core::Ray), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                              gpu::MemoryUsage::DeviceLocal);

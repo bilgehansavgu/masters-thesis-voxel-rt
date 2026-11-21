@@ -4,7 +4,9 @@
 import types;
 import display;
 #include "thesis/shared/Bindings.h"
+#include "thesis/shared/ColorScale.h"
 #include "thesis/shared/Hit.h"
+#include "thesis/shared/RayOrder.h"
 
 struct ShadeWorkParams
 {
@@ -13,9 +15,9 @@ struct ShadeWorkParams
     uint mode;   // 0 cells visited, 1 primitives tested, 2 runs tested, 3 kind of the cell at the hit,
                  // 4 steps through the search structure, 5 mipmap cells read,
                  // 6 the largest mipmap square that the ray skipped
-    uint pad0;
-    float scale; // the count that gets the last colour of the scale
-    float pad1;
+    uint scaleKind; // THESIS_COLOR_SCALE_LINEAR or THESIS_COLOR_SCALE_LOG2
+    float scale;    // the count at the end of the colour map; a larger count is white
+    uint rayOrder;  // THESIS_RAY_ORDER_*: where the hit and work of a pixel are in their lists
     float pad2;
     float pad3;
 };
@@ -35,18 +37,39 @@ float3 levelColor(uint level)
     return colors[min(level, 6u) - 1];
 }
 
-// Colour scale for a count: black (0), blue, green, yellow, red (`scale`), white (more than `scale`).
-float3 heat(float count, float scale)
+// Viridis at t in [0, 1], display-encoded (sRGB). Same formula as viridis() in resolve/ColorScale.cpp.
+float3 viridis(float t)
+{
+    const float3 c[7] = {float3(THESIS_VIRIDIS_C0), float3(THESIS_VIRIDIS_C1), float3(THESIS_VIRIDIS_C2),
+                         float3(THESIS_VIRIDIS_C3), float3(THESIS_VIRIDIS_C4), float3(THESIS_VIRIDIS_C5),
+                         float3(THESIS_VIRIDIS_C6)};
+    const float x = saturate(t);
+    float3 value = c[6];
+    for (int k = 5; k >= 0; --k)
+        value = c[k] + x * value;
+    return saturate(value);
+}
+
+// Position of a count in (0, scale] along the map. Same formula as ColorScale::position() in
+// resolve/ColorScale.cpp, which also draws the colour bar.
+float scalePosition(float count, float scale, uint kind)
+{
+    if (kind == THESIS_COLOR_SCALE_LOG2)
+        return saturate(log2(max(count, 1.0)) / log2(max(scale, 2.0)));
+    return saturate(count / max(scale, 1.0));
+}
+
+// Colour of a count, linear like every colour that goes through toDisplay(): black for 0, the map
+// up to `scale`, white above it.
+float3 countColor(float count, float scale, uint kind)
 {
     if (count <= 0.0)
         return float3(0.0, 0.0, 0.0);
     if (count > scale)
         return float3(1.0, 1.0, 1.0);
-    const float3 stops[4] = {float3(0.05, 0.15, 0.85), float3(0.10, 0.75, 0.25), float3(0.95, 0.85, 0.10),
-                             float3(0.90, 0.10, 0.10)};
-    const float x = 3.0 * count / max(scale, 1.0);
-    const uint segment = min(uint(x), 2u);
-    return lerp(stops[segment], stops[segment + 1], x - float(segment));
+    // WHY pow: the map is display-encoded and toDisplay() encodes once more. Decoding first makes
+    // the stored value the viridis value, so the image matches the colour bar.
+    return pow(viridis(scalePosition(count, scale, kind)), 2.2);
 }
 
 [shader("compute")]
@@ -56,7 +79,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
     if (threadId.x >= gParams.width || threadId.y >= gParams.height)
         return;
 
-    const uint index = threadId.y * gParams.width + threadId.x;
+    const uint index = THESIS_RAY_INDEX(gParams.rayOrder, threadId.x, threadId.y, gParams.width, gParams.height);
     const RayWork work = gWork[index];
     float3 color;
 
@@ -90,7 +113,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
             count = work.structureSteps;
         else if (gParams.mode == 5)
             count = work.mipmapCells;
-        color = heat(float(count), gParams.scale);
+        color = countColor(float(count), gParams.scale, gParams.scaleKind);
     }
 
     gOutput[threadId.xy] = toDisplay(color);

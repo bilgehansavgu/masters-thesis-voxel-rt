@@ -28,21 +28,13 @@ const char* cellKindName(std::uint32_t kind)
     }
 }
 
-RayLogLine describe(const core::RayLogEntry& step)
+RayLogLine describe(const core::RayLogEntry& step, const StructureStepText& structureStep)
 {
     RayLogLine line;
     line.t = step.t;
     switch (step.kind) {
-    case THESIS_LOG_GRID_CELL:
-        line.text = std::format("grid cell ({}, {}, {})", step.a, step.b, step.c);
-        break;
-    case THESIS_LOG_OCTREE_NODE:
-        line.text = step.d == 0 ? std::format("octree cell ({}, {}, {})", step.a, step.b, step.c)
-                                : std::format("octree node of {0}x{0}x{0} cells around cell ({1}, {2}, {3})",
-                                              1u << step.d, step.a, step.b, step.c);
-        break;
-    case THESIS_LOG_BVH_NODE:
-        line.text = std::format("BVH node {}", step.a);
+    case THESIS_LOG_STRUCTURE_STEP:
+        line.text = structureStep(step);
         break;
     case THESIS_LOG_PRIMITIVE:
         line.depth = 1;
@@ -105,12 +97,12 @@ RayLogLine describe(const core::RayLogEntry& step)
 
 } // namespace
 
-std::vector<RayLogLine> describeRayLog(const tracing::RayLog& log)
+std::vector<RayLogLine> describeRayLog(const tracing::RayLog& log, const StructureStepText& structureStep)
 {
     std::vector<RayLogLine> lines;
     lines.reserve(log.steps.size() + 1);
     for (const core::RayLogEntry& step : log.steps) {
-        lines.push_back(describe(step));
+        lines.push_back(describe(step, structureStep));
     }
     if (log.lostSteps > 0) {
         lines.push_back(

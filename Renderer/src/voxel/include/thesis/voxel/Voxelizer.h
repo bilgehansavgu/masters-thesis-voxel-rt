@@ -1,5 +1,7 @@
 #pragma once
 
+// Side: CPU
+
 #include "thesis/mesh/TriangleMesh.h"
 #include "thesis/voxel/VoxelModel.h"
 

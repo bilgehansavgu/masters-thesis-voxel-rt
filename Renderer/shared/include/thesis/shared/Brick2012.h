@@ -1,3 +1,4 @@
+/* Side: Shared */
 /* Bit layout of the 2012 brick format: the ONLY place these numbers are written.
  *
  * Read by the C++ encoder (src/encodings/brick2012) and, from step 2 on, by the brick shaders.

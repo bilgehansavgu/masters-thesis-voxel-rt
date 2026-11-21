@@ -1,5 +1,7 @@
 #pragma once
 
+// Side: CPU
+
 #include "thesis/encoding/Encoding.h"
 
 namespace thesis::plugins {

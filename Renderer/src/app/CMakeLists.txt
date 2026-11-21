@@ -10,10 +10,16 @@ add_executable(thesis_renderer
     Interactive.cpp
     Interactive.h
     Options.h
+    Overlay.cpp
+    Overlay.h
     Presenter.cpp
     Presenter.h
     RayLogText.cpp
     RayLogText.h
+    StructureView.cpp
+    StructureView.h
+    RayLesson.cpp
+    RayLesson.h
     RayWorkSummary.cpp
     RayWorkSummary.h
     SceneSetup.cpp
@@ -41,6 +47,7 @@ target_link_libraries(thesis_renderer PRIVATE
     CLI11::CLI11)
 target_include_directories(thesis_renderer SYSTEM PRIVATE ${Stb_INCLUDE_DIR})
 target_compile_definitions(thesis_renderer PRIVATE THESIS_DEFAULT_SHADER_DIR="${THESIS_SHADER_OUTPUT_DIR}")
+target_compile_definitions(thesis_renderer PRIVATE THESIS_LUCY_MODEL="${CMAKE_SOURCE_DIR}/../Models/lucy-2048.voxels")
 set_target_properties(thesis_renderer PROPERTIES
     FOLDER "app"
     VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")

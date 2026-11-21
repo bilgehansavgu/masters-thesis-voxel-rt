@@ -1,5 +1,7 @@
 #pragma once
 
+// Side: GPU
+
 // Order matters: TracyVulkan.hpp needs the Vulkan header first (separate blocks keep the
 // formatter from sorting them).
 #include <vulkan/vulkan.h>

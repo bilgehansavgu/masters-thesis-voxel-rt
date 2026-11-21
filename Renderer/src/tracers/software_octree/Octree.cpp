@@ -1,6 +1,6 @@
 #include "thesis/tracers/software_octree/Octree.h"
 
-#include "thesis/shared/Octree.h"
+#include "thesis/tracers/software_octree/OctreeShared.h"
 
 #include <algorithm>
 #include <stdexcept>
@@ -87,7 +87,7 @@ private:
 
 } // namespace
 
-Octree buildOctree(std::span<const core::Aabb> boxes, const GridFrame& frame)
+Octree buildOctree(std::span<const core::Aabb> boxes, const tracing::GridFrame& frame)
 {
     if (boxes.size() > THESIS_OCTREE_ITEM_MASK) {
         throw std::length_error("buildOctree: too many primitives");

@@ -43,7 +43,8 @@ State after step 3: every tracer shows a voxel model. Every tracer runs the same
 each brick that its search structure gives it: the ray walks the primary grid of the brick and
 tests the filled voxels of each column (`shaders/common/brick2012.slang`). With a `_mip`
 encoding the walk first reads the min/max mipmap of the brick and skips every square of cells
-that the ray passes above or below. It finds the same hits, bit for bit. The software tracers
+that the ray passes above or below. It finds the same hits as the walk without the mipmap, within
+the tolerance of the agreement test (relative distance 1e-4, `thesis/core/HitComparison.h`). The software tracers
 walk a uniform grid, a sparse octree or a binary BVH of their own. The window shows what each
 ray does: work views, live averages, and the ray inspector, which lists every step of one ray.
 
@@ -93,7 +94,8 @@ build/src/tools/model/Release/thesis_model.exe report --model ../Models/lucy-204
 ## Running
 
 ```bash
-build/src/app/Release/thesis_renderer.exe                                       # box field (step 0 scene)
+build/src/app/Release/thesis_renderer.exe                                       # Explore Lucy 2048 if available
+build/src/app/Release/thesis_renderer.exe --boxes                               # box tracing example
 build/src/app/Release/thesis_renderer.exe --model ../Models/lucy-2048.voxels    # a voxel model
 build/src/app/Release/thesis_renderer.exe --benchmark --model ../Models/lucy-2048.voxels --encoding brick2012_split
 build/src/app/Release/thesis_renderer.exe --model ../Models/lucy-2048.voxels --screenshot lucy.png --camera 90 10 0.75
@@ -101,10 +103,52 @@ build/src/app/Release/thesis_renderer.exe --model ../Models/lucy-2048.voxels --e
 build/src/app/Release/thesis_renderer.exe --help
 ```
 
-In the window: drag to orbit, scroll to zoom. **Tab** switches the tracer, **E** the encoding,
+To repeat the empty-space skipping comparison with the benchmark runner, use the following from `Renderer`.
+
+```bash
+build/src/app/Release/thesis_renderer.exe --model ../Models/lucy-2048.voxels --compare-skipping --tracer hardware
+build/src/app/Release/thesis_renderer.exe --open-result path/to/fixed-view-result.json
+```
+
+The window opens on Lucy (`Models/lucy-2048.voxels`) if that file exists, otherwise on a field of
+solid boxes. It has three tabs.
+
+**Explore** explains what the renderer does, in plain words:
+
+- *What you see*: Surface, Voxels or Bricks, each with one sentence about what the colours mean.
+- *How the ray finds the surface*: the search method, with one sentence about how it works.
+  **Show the search structure** (key S) draws a horizontal cut through the structure at the
+  **Cut height**: the cells of the uniform grid (blue: a cell with a brick), the cubes of the
+  sparse octree (grey: empty space that is not divided further), the boxes of the software BVH at
+  one **Tree level**, or the brick boxes that the GPU gets for its own tree. The panel counts them,
+  for example how many squares the octree needs for a cut that takes the grid hundreds of cells.
+- *Follow one ray*: **Pick a pixel** (or right-click without moving). **Next** and **Previous** (arrow keys) step
+  through the ray: the ray, the search (the grid cells, octree cubes or BVH boxes that the ray
+  visited, in gold; for hardware only the bricks that the GPU handed over), the brick, the
+  columns inside the brick, and the voxel it hit. **Side view** (key V) shows the ray from the
+  side. The camera moves only on Side view. Changing the search method records the same pixel
+  again and shows the work of both methods side by side.
+
+Lines behind the model are drawn faint: the window reads the distance to the surface of each
+pixel once each time the camera stops.
+
+**Measure** has **Compare two settings at this view**: it runs the benchmark protocol twice at the
+current camera (skipping off/on, or a second tracer) on one frozen buffer of camera rays. It
+checks that both runs got the same rays, and compares the hits with the rule of the agreement test,
+so a last-bit difference in a distance does not count. Both results files are saved together.
+**Open this view in Explore** restores the camera, tracer and encoding of a row. The command line
+benchmark accepts `--fixed-view` for a stationary camera; its default camera path is a full orbit.
+Below that, the quick live timings of the window, which are not for the thesis.
+
+**Controls** contains the encodings, the brick sizes, all views (including the work views) and the
+switch between the voxel model and the box scene.
+
+In the window: left-drag to orbit, scroll to zoom. Hold the right button to fly: the mouse turns
+the view, **W/A/S/D** move, **Q/E** go down and up, **Shift** is faster, scrolling sets the speed. **Tab** switches the tracer, **E** the encoding,
 **B** the brick size (with Shift: the one before), **1-9, 0, -, =** the view. **M** measures
-every tracer at the current camera ("Measure all"), **R** resets the camera. A **right click**
-on the image starts the ray inspector on that pixel, **Esc** stops it. The panel shows the size
+every tracer at the current camera ("Quick timing"), **R** resets the camera. **S** shows the
+search structure, the **arrow keys** step along a picked ray, **V** shows it from the side. A **right click**
+(without moving the mouse) on the image starts the ray inspector on that pixel, **Esc** stops it. The panel shows the size
 of every buffer of the current encoding and the bits per voxel. Switching the encoding or the
 brick size encodes the model again and rebuilds the search structures, so the numbers in the
 panel always belong to what is on screen.
@@ -122,8 +166,8 @@ panel always belong to what is on screen.
 | - | Mipmap cells read |
 | = | The largest mipmap square that the walk skipped: blue 2x2 cells, green 4x4, yellow 8x8, orange 16x16, red 32x32 |
 
-The views 6 to = and the ray inspector run the counting variant of the tracer's shader (see
-below), which is slower. The trace time in the panel is then not the time of the tracer. With a
+Work views and the frame that captures a selected pixel run the counting shader. Exploring the
+saved ray uses its recorded events. The comparison table only accepts ordinary trace frames. With a
 work view on, the panel also shows the average work of a ray in the frame, about once a second.
 
 The **ray inspector** lists every step of one ray in order: the cells or nodes of the search
@@ -133,20 +177,27 @@ the hit. "Copy as text" puts the list on the clipboard. The hardware tracer cann
 nodes of its BVH, so its list starts at the primitives.
 
 `--benchmark` is headless and writes `results/<time>_<tracer>[_<encoding>].json`.
-`--screenshot <file.png>` is headless too: it writes one frame, with `--view <1-12>`. With
+`--screenshot <file.png>` is headless too: it writes one frame, with `--view <1-12>`. A count
+view (6, 7, 8, 10, 11) gets its colour bar in a strip below the image: viridis, black for 0,
+white above `--scale-max <count>` (default 64), linear or with `--log-scale` log2. With
 `--inspect <x> <y>` it also prints every step of the ray of that pixel. In the window,
 `--inspect` starts the ray inspector on that pixel. `--brick-size 8|16|32` regroups the voxels
 into bricks of that size before the encoding.
 `--camera <yaw> <pitch> <factor>` sets the camera at the start: two angles in degrees, and the
 distance as a factor of the distance that shows the whole scene. For the benchmark it is the
 start and the radius of the orbit.
+`--ray-order rows|tiles` sets where the ray of each pixel sits in the ray list. The GPU traces
+32 neighbouring rays of the list together. With `rows` (the default) these are 32 pixels of one
+row; with `tiles` they are a tile of 8 x 4 pixels. The image is the same either way; only the
+speed can change. The rule is in `shared/include/thesis/shared/RayOrder.h`.
 `--list-tracers` and `--list-encodings` print what is built in. `--self-test` uses every
 control of the window once and closes it (a smoke test of the window).
 
 ### Many runs at once
 
 `scripts/run_benchmarks.py` runs the benchmark for every case of a plan file (models, encodings,
-brick sizes, camera orbits; `scripts/ablation_step3.json` is the plan of step 3). It runs a tracer
+brick sizes, camera orbits, and optionally `ray_orders`; `scripts/ablation_step3.json` is the plan
+of step 3, `scripts/ray_order.json` compares the two ray orders). It runs a tracer
 again when the spread between its repeats is above 3 %, and writes `table.md` and `table.csv`
 from the results files. Every number in the table comes from a results file.
 
@@ -189,60 +240,18 @@ The benchmark follows a fixed protocol so numbers can be compared across days:
    state, Windows power plan and mode, build configuration and git commit. For a voxel model
    it also records the encoding, the size of every buffer and the statistics of the encoding.
 4. Validation must be off for numbers (`--validation` is for correctness only).
-5. Rays and hits pass through GPU memory. That costs every tracer the same; the `null` tracer
-   measures exactly that floor, and the benchmark prints each tracer's time above it.
+5. Rays and hits pass through GPU memory, the same for every tracer. The `null` tracer only
+   reads the rays and writes misses, so its time shows how much of a trace is this memory
+   traffic. The trace time itself is the number to report. The time above the null tracer is
+   only a hint: the GPU reads memory and searches at the same time, so the difference is not
+   the cost of the search. Never divide two of these differences.
 6. Before a number is used, look at `spread_between_repeats_percent` in its results file. The
    runner script runs a tracer again when the spread is above 3 %.
 
 For thesis numbers: plugged in, same Windows power mode, nothing else running.
 
-## Layout
+## Layout and extending
 
-| Folder | Job | May use |
-|---|---|---|
-| `src/core` | Data types, scene, camera, statistics, registry | nothing (glm) |
-| `src/mesh` | Triangle mesh, PLY reader | miniply |
-| `src/voxel` | Voxel model, voxelizer, voxel file, packed normals | mesh |
-| `src/encoding` | The encoding socket: `IEncoding`, memory report | core, voxel |
-| `src/encodings/*` | One folder per encoding plugin (`brick2012`: both layouts) | encoding |
-| `src/gpu` | Thin Vulkan layer: device, buffers, kernels, timers | Vulkan, vk-bootstrap, VMA, Tracy |
-| `src/tracing` | The tracer socket: `ITracer`, ray and hit lists, GPU scene | core, gpu |
-| `src/tracers/*` | One folder per tracer plugin, with its shader and its search structure (`software_grid`, `software_octree`, `software_bvh`) | tracing |
-| `src/workloads` | Ray generators (camera rays) | tracing |
-| `src/resolve` | Hits → image | tracing |
-| `src/metrics` | Measurement output socket: Tracy plots, JSON results, system state | core |
-| `src/app` | Window, control panel (with the ray inspector), presenter, benchmark mode, frame pipeline, scene source | everything |
-| `src/tools/model` | `thesis_model`: voxelize a mesh, report on the encodings | encodings, metrics |
-| `shared` | Headers read by both C++ and shaders (binding slots, brick bit layout, bits of a hit, octree and BVH nodes, the ray log) | |
-| `shaders/common` | Shared GPU code: formats (`types.slang`), box test (`aabb.slang`), the brick test of the 2012 format (`brick2012.slang`), the two bit layouts (`brick2012_inline.slang`, `brick2012_split.slang`), the stored mipmap (`brick2012_mipmap.slang`), the closest hit of a ray (`closest.slang`), work counters and ray log (`work.slang`), packed normals (`normals.slang`) | |
-| `shaders/primitives/<kind>` | What is inside a primitive's box: `box`, `brick2012_inline`, `brick2012_split`, `brick2012_inline_mip`, `brick2012_split_mip` | |
-| `scripts` | `run_benchmarks.py` and its plan files | |
-| `tests` | Unit tests, encoding round trips, the cross-tracer agreement test, the brick test against a CPU test of every voxel cube and against hand-computed rays | |
-
-Each library only sees the headers of libraries it links, so the dependency direction is
-enforced by the build. Mesh, voxel and encoding code knows nothing about Vulkan.
-
-## Extending
-
-- **New tracer:** add `src/tracers/<name>/` with an `ITracer` implementation, its shader, and a
-  `CMakeLists.txt` calling `thesis_register_plugin(SOCKET TRACER ...)`; add the folder in
-  `src/tracers/CMakeLists.txt`. No other code changes; the agreement test covers it automatically.
-- **New encoding:** add `src/encodings/<name>/` with an `IEncoding` implementation and a
-  `CMakeLists.txt` calling `thesis_register_plugin(SOCKET ENCODING ...)`; add the folder in
-  `src/encodings/CMakeLists.txt`. Add a primitive kind with the same name (next point). The
-  round trip test, the cube-by-cube test, the report tool, the benchmark and the panel pick it
-  up automatically.
-- **New bit layout of the 2012 format:** the brick test is shared. The kind's `primitive.slang`
-  only implements the four functions of `IBrickLayout` (`shaders/common/brick2012.slang`):
-  read a cell, find the run words of a column, read the normal of a height cell, read the
-  normal of a voxel in a column with runs.
-- **New primitive kind:** add `shaders/primitives/<kind>/primitive.slang` implementing the
-  contract described in `shaders/primitives/box/primitive.slang` (two functions:
-  `intersectPrimitive` and `primitiveAttributes`), and add the kind to
-  `THESIS_PRIMITIVE_KINDS` in `CMakeLists.txt`. Every tracer is compiled for it automatically.
-  The kind's own buffers go in `core::Scene::primitiveData` (bindings 9..15); tracers pass them
-  through without knowing about them.
-- **Baseline tracers** (like `null`) return `false` from `ITracer::findsHits()`: they are
-  benchmarked, but skipped by the correctness tests.
-- **A tracer that cannot handle a scene** throws `tracing::UnsupportedScene` from `prepare()`.
-  The window leaves it out and says why; the benchmark skips it unless it was asked for by name.
+[`ARCHITECTURE.md`](ARCHITECTURE.md) owns the structure of the code: the folders and what each
+one may use, the sockets and their rules, and how to add a tracer, an encoding, a bit layout or
+a primitive kind.

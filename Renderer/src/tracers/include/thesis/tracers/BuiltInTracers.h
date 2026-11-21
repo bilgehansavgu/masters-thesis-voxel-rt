@@ -1,5 +1,7 @@
 #pragma once
 
+// Side: GPU
+
 #include "thesis/tracing/Tracer.h"
 
 namespace thesis::plugins {

@@ -1,5 +1,7 @@
 #pragma once
 
+// Side: GPU
+
 #include <vulkan/vulkan.h>
 
 namespace thesis::gpu {

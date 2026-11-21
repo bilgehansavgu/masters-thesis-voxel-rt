@@ -1,5 +1,7 @@
 thesis_add_library(tracer_hardware
-    SOURCES HardwareTracer.cpp
+    SOURCES
+        HardwareDiagram.cpp
+        HardwareTracer.cpp
     PUBLIC_DEPS thesis::tracing
     FOLDER "tracers")
 thesis_add_shaders(OWNER thesis_tracer_hardware SOURCES shaders/trace_hardware.slang PER_PRIMITIVE COUNTING

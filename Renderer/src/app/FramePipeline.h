@@ -1,11 +1,13 @@
 #pragma once
 
+// Side: GPU
+
 #include "thesis/core/Camera.h"
 #include "thesis/gpu/GpuTimer.h"
 #include "thesis/gpu/Image.h"
 #include "thesis/resolve/HitShading.h"
 #include "thesis/tracing/RayBatch.h"
-#include "thesis/tracing/RayLog.h"
+#include "thesis/tracing/RayLogBuffer.h"
 #include "thesis/tracing/Tracer.h"
 #include "thesis/workloads/CameraRays.h"
 
@@ -13,6 +15,7 @@
 
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <vector>
 
 namespace thesis::app {
@@ -27,7 +30,8 @@ inline constexpr const char* kStageShading = "shading";
 // Each stage is timed on the GPU. One frame in flight at a time.
 class FramePipeline {
 public:
-    FramePipeline(const gpu::Context& context, const std::filesystem::path& shaderDirectory, VkExtent2D resolution);
+    FramePipeline(const gpu::Context& context, const std::filesystem::path& shaderDirectory, VkExtent2D resolution,
+                  tracing::RayOrder order);
 
     // Start of a frame's command buffer: resets the timers, flushes Tracy GPU zones.
     void begin(VkCommandBuffer cmd);
@@ -37,6 +41,8 @@ public:
     // A tracer that cannot count work is traced as usual. Such a frame also writes the ray log
     // of the ray set with setLoggedRay().
     void trace(VkCommandBuffer cmd, tracing::ITracer& tracer, const core::CameraFrame& camera, bool countWork = false);
+    // Fixed-view benchmark: generate the workload once, or load the first condition's exact rays.
+    void freezeRays(const core::CameraFrame& camera, std::span<const std::byte> reference);
     // Shading into output() (left in GENERAL layout, ready to be copied by the caller).
     void shade(VkCommandBuffer cmd, const resolve::ShadingParams& params);
 
@@ -63,6 +69,7 @@ private:
     std::optional<tracing::RayLogBuffer> log_; // created with work_
     std::optional<std::uint32_t> loggedRay_;
     bool logWritten_ = false;
+    bool frozenRays_ = false;
     gpu::StorageImage output_;
     workloads::CameraRays cameraRays_;
     resolve::HitShading shading_;

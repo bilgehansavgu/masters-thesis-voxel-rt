@@ -1,5 +1,7 @@
 #pragma once
 
+// Side: CPU
+
 #include <glm/vec3.hpp>
 
 #include <cstdint>

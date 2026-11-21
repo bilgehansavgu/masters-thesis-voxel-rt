@@ -1,3 +1,4 @@
+/* Side: Shared */
 /* Descriptor binding slots: the ONLY place a slot number is written.
  *
  * Included verbatim by C++ (src/tracing/include/thesis/tracing/Bindings.h and others) and by
@@ -11,14 +12,10 @@
 #define THESIS_BINDING_RAYS 0 /* ray list, read */
 #define THESIS_BINDING_HITS 1 /* hit list, write */
 
-#define THESIS_BINDING_TRACER_FIRST 2 /* 2..6 belong to the tracer itself */
+/* 2..6 belong to the tracer itself. Each tracer names its own in its folder:
+ * src/tracers/<name>/include/thesis/tracers/<name>/<Name>Shared.h. */
+#define THESIS_BINDING_TRACER_FIRST 2
 #define THESIS_BINDING_TRACER_LAST 6
-#define THESIS_BINDING_HARDWARE_SCENE 2 /* hardware tracer: the GPU-built search structure */
-#define THESIS_BINDING_GRID_CELLS 2     /* grid tracer: where the list of each grid cell starts */
-#define THESIS_BINDING_GRID_ITEMS 3     /* grid tracer: the primitive indices of all cells */
-#define THESIS_BINDING_OCTREE_NODES 2   /* octree tracer: the node words, see Octree.h */
-#define THESIS_BINDING_OCTREE_ITEMS 3   /* octree tracer: the lists of cells with several primitives */
-#define THESIS_BINDING_BVH_NODES 2      /* BVH tracer: the nodes */
 
 #define THESIS_BINDING_RAY_WORK 7 /* counting variant of a tracer only: one RayWork per ray, write */
 

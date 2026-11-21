@@ -1,15 +1,21 @@
 #pragma once
 
+// Side: GPU
+
 #include "thesis/core/Registry.h"
 #include "thesis/gpu/ComputeKernel.h"
 #include "thesis/tracing/GpuScene.h"
 #include "thesis/tracing/RayBatch.h"
+#include "thesis/tracing/StructureDiagram.h"
 
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
 #include <filesystem>
+#include <format>
+#include <memory>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -43,6 +49,16 @@ public:
     using std::runtime_error::runtime_error;
 };
 
+// What people read about a tracer in the window. The tracer owns it, so no code outside the
+// tracer's folder needs to know its name.
+struct TracerText {
+    std::string label;  // a few words, for example "Sparse octree"
+    std::string method; // how the search works, one to three sentences; empty for a baseline
+    // What core::RayWork::structureSteps counts, plural (for example "octree cubes"). Empty if the
+    // tracer does not count them (see ITracer::countsStructureSteps).
+    std::string structureStep;
+};
+
 // Where the counting variant of a tracer writes (ITracer::traceCounting).
 //   perRay  core::RayWork for each ray of the batch
 //   log     core::RayLogEntry[1 + THESIS_RAY_LOG_CAPACITY]: the steps of the one ray that its
@@ -62,6 +78,7 @@ public:
     virtual ~ITracer() = default;
 
     [[nodiscard]] virtual std::string_view name() const = 0;
+    [[nodiscard]] virtual TracerText text() const = 0;
 
     // Builds whatever the tracer needs for `scene` and blocks until it is ready. `scene` must
     // outlive the tracer or the next prepare() call. Throws UnsupportedScene if the tracer
@@ -88,6 +105,23 @@ public:
     virtual void traceCounting(VkCommandBuffer /*cmd*/, const RayBatch& /*batch*/, const WorkOutput& /*work*/)
     {
         throw std::logic_error("This tracer does not count work");
+    }
+    // True if the counting variant also counts the steps through the search structure
+    // (core::RayWork::structureSteps). The hardware tracer cannot: the GPU does not report the
+    // nodes of its BVH.
+    [[nodiscard]] virtual bool countsStructureSteps() const { return countsWork(); }
+    // DIAGNOSIS. A step through the search structure from the ray log (kind
+    // THESIS_LOG_STRUCTURE_STEP) in a few words. a to d mean what the tracer's shader wrote there.
+    [[nodiscard]] virtual std::string describeStructureStep(const core::RayLogEntry& step) const
+    {
+        return std::format("structure step ({}, {}, {}, {})", step.a, step.b, step.c, step.d);
+    }
+
+    // DIAGNOSIS. What the window shows of the search structure, built on the CPU for `input`.
+    // Null if the tracer has no structure to show (a baseline).
+    [[nodiscard]] virtual std::unique_ptr<IStructureDiagram> diagram(const DiagramInput& /*input*/) const
+    {
+        return nullptr;
     }
 };
 

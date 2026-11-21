@@ -6,7 +6,9 @@
 // as the uniform grid of the grid tracer, but it stores only the parts of space that hold a
 // primitive.
 
+#include "OctreeDiagram.h"
 #include "thesis/tracers/software_octree/Octree.h"
+#include "thesis/tracers/software_octree/OctreeShared.h"
 
 #include "thesis/gpu/Buffer.h"
 #include "thesis/tracing/Bindings.h"
@@ -16,6 +18,7 @@
 #include <glm/vec3.hpp>
 
 #include <chrono>
+#include <format>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -27,6 +30,7 @@ namespace {
 
 constexpr std::uint32_t kNodesBinding = THESIS_BINDING_OCTREE_NODES;
 constexpr std::uint32_t kItemsBinding = THESIS_BINDING_OCTREE_ITEMS;
+static_assert(kNodesBinding >= THESIS_BINDING_TRACER_FIRST && kItemsBinding <= THESIS_BINDING_TRACER_LAST);
 
 // Mirrors TraceParams in trace_software_octree.slang.
 struct TraceParams {
@@ -48,6 +52,23 @@ public:
     {}
 
     std::string_view name() const override { return "software_octree"; }
+    tracing::TracerText text() const override
+    {
+        return {"Sparse octree",
+                "Space is cut into 8 cubes, and each cube again into 8, down to the size of one brick. Empty cubes are "
+                "not cut further, so the ray crosses a large empty cube in one step.",
+                "octree cubes"};
+    }
+    std::unique_ptr<tracing::IStructureDiagram> diagram(const tracing::DiagramInput& input) const override
+    {
+        return makeOctreeDiagram(input);
+    }
+    std::string describeStructureStep(const core::RayLogEntry& step) const override
+    {
+        return step.d == 0 ? std::format("octree cell ({}, {}, {})", step.a, step.b, step.c)
+                           : std::format("octree node of {0}x{0}x{0} cells around cell ({1}, {2}, {3})", 1u << step.d,
+                                         step.a, step.b, step.c);
+    }
 
     tracing::PrepareReport prepare(const tracing::GpuScene& scene) override
     {
@@ -56,7 +77,7 @@ public:
         const auto start = std::chrono::steady_clock::now();
         Octree octree;
         try {
-            octree = buildOctree(boxes, chooseGridFrame(boxes.size(), scene.bounds, scene.primitiveGrid));
+            octree = buildOctree(boxes, tracing::chooseGridFrame(boxes.size(), scene.bounds, scene.primitiveGrid));
         } catch (const std::length_error& reason) {
             throw tracing::UnsupportedScene(reason.what());
         }

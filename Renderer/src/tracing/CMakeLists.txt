@@ -1,8 +1,11 @@
 thesis_add_library(tracing
     SOURCES
         GpuScene.cpp
+        GridFrame.cpp
         RayBatch.cpp
         RayLog.cpp
+        RayLogBuffer.cpp
+        StructureDiagram.cpp
         TraceKernels.cpp
     PUBLIC_DEPS
         thesis::core

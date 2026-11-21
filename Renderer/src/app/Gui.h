@@ -1,5 +1,7 @@
 #pragma once
 
+// Side: GPU
+
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
@@ -11,6 +13,10 @@ class Context;
 namespace thesis::app {
 
 class Window;
+
+// The face of the panel text, and of the colour bar that --screenshot writes. Where the file is
+// missing, both use the face built into Dear ImGui.
+inline constexpr const char* kInterfaceFontFile = "C:/Windows/Fonts/segoeui.ttf";
 
 // Dear ImGui with GLFW input and Vulkan dynamic rendering. Draws whatever ImGui calls were made
 // between newFrame() and render(); it does not decide what the panel shows (see ControlPanel).

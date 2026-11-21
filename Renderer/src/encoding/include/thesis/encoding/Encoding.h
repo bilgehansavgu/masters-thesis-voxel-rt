@@ -1,9 +1,12 @@
 #pragma once
 
+// Side: CPU
+
 #include "thesis/core/Registry.h"
 #include "thesis/core/Scene.h"
 #include "thesis/voxel/VoxelModel.h"
 
+#include <glm/vec3.hpp>
 #include <nlohmann/json.hpp>
 
 #include <cstdint>
@@ -13,6 +16,13 @@
 
 namespace thesis::encoding {
 
+// Where one brick sits: its coordinate in the brick grid (core::Scene::primitiveGrid), and the
+// axis along which the encoding stores its columns (0 = x, 1 = y, 2 = z).
+struct BrickPlace {
+    glm::uvec3 coordinate{0};
+    int columnAxis = 1;
+};
+
 // What an encoding makes of a voxel model.
 struct EncodedModel {
     // One primitive per brick. `primitiveBounds` are the boxes around the filled voxels of each
@@ -21,6 +31,8 @@ struct EncodedModel {
     core::Scene scene;
     // Numbers that describe the encoded data, e.g. how many cells are of each kind.
     nlohmann::json statistics;
+    // The brick of each primitive, in primitive order. For the window, which shows one brick of a ray.
+    std::vector<BrickPlace> bricks;
 };
 
 // THE ENCODING SOCKET. An encoding turns a voxel model into the buffers that the GPU reads, and
@@ -43,6 +55,13 @@ public:
     // Extra numbers for reports that are too slow to compute on every encode(), e.g. what a
     // different design choice would have cost. Null if the encoding has none.
     [[nodiscard]] virtual nlohmann::json analyze(const voxel::VoxelModel& /*model*/) const { return nullptr; }
+
+    // True if the brick test skips empty space inside a brick (the min/max mipmap of the 2012
+    // format).
+    [[nodiscard]] virtual bool skipsEmptySpace() const { return false; }
+    // The encoding that stores the same bricks with skipping switched the other way, or empty if
+    // there is none. The window and the benchmark compare the two ("skipping off / on").
+    [[nodiscard]] virtual std::string skippingTwin() const { return {}; }
 };
 
 using EncodingRegistry = core::Registry<IEncoding>;

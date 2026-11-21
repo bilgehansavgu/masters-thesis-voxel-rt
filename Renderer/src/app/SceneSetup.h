@@ -1,5 +1,7 @@
 #pragma once
 
+// Side: CPU
+
 #include "Options.h"
 
 #include "thesis/core/Camera.h"
@@ -25,7 +27,8 @@ struct BuiltScene {
     std::uint64_t voxels = 0;
     encoding::MemoryReport memory; // size of every buffer
     double encodeSeconds = 0.0;
-    nlohmann::json statistics; // what the encoding reports about its data; null without encoding
+    nlohmann::json statistics;                // what the encoding reports about its data; null without encoding
+    std::vector<encoding::BrickPlace> bricks; // the brick of each primitive; empty for the box field
 };
 
 // What the program shows: the box field of step 0, or a voxel model (--model) that can be
@@ -37,6 +40,8 @@ public:
     struct EncodingChoice {
         std::string name;
         std::string description;
+        bool skipsEmptySpace = false; // see encoding::IEncoding
+        std::string skippingTwin;
     };
 
     explicit SceneSource(const Options& options);
@@ -44,7 +49,7 @@ public:
     [[nodiscard]] bool isVoxelModel() const { return model_.has_value(); }
     // The encodings to choose from, in registration order. Empty for the box field.
     [[nodiscard]] const std::vector<EncodingChoice>& encodings() const { return encodings_; }
-    // Index into encodings() of the encoding named by --encoding (0 if none was named).
+    // Index into encodings() of the encoding named by --encoding, or else of the default encoding.
     [[nodiscard]] std::size_t initialEncoding() const { return initialEncoding_; }
     // The brick sizes to choose from. Empty for the box field.
     [[nodiscard]] const std::vector<std::uint32_t>& brickSizes() const { return brickSizes_; }
@@ -56,6 +61,9 @@ public:
     [[nodiscard]] BuiltScene build(std::size_t encoding, std::uint32_t brickSize);
     // The scene of the command line.
     [[nodiscard]] BuiltScene build() { return build(initialEncoding_, initialBrickSize_); }
+    // The voxels of the brick at `coordinate` (in bricks) of the model in bricks of `brickSize`, or
+    // nullptr when that brick is empty or the scene is not a voxel model. For the ray walk of the window.
+    [[nodiscard]] const voxel::VoxelBrick* findBrick(std::uint32_t brickSize, glm::uvec3 coordinate);
 
 private:
     // The model in bricks of `brickSize`: the model of the file, or a regrouped copy of it.

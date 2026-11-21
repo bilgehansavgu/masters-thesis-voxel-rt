@@ -5,8 +5,10 @@
 // the software tracers, so the comparison isolates the search structure. A ray tracing
 // pipeline variant (intersection shaders, as in OptiX) can be added later as another plugin.
 
+#include "HardwareDiagram.h"
 #include "thesis/core/GpuTypes.h"
 #include "thesis/gpu/AccelerationStructure.h"
+#include "thesis/tracers/hardware/HardwareShared.h"
 #include "thesis/tracing/Bindings.h"
 #include "thesis/tracing/TraceKernels.h"
 #include "thesis/tracing/Tracer.h"
@@ -21,6 +23,7 @@ namespace thesis::tracers {
 namespace {
 
 constexpr std::uint32_t kSceneBinding = THESIS_BINDING_HARDWARE_SCENE;
+static_assert(kSceneBinding >= THESIS_BINDING_TRACER_FIRST && kSceneBinding <= THESIS_BINDING_TRACER_LAST);
 
 // The GPU's search-structure builder reads the scene's bounds buffer directly, as an array of
 // VkAabbPositionsKHR (six packed floats) with stride sizeof(core::Aabb). These checks fail the
@@ -50,6 +53,15 @@ public:
     {}
 
     std::string_view name() const override { return "hardware"; }
+    tracing::TracerText text() const override
+    {
+        return {"Hardware ray tracing", "The GPU's ray tracing units search a tree (a BVH) that the GPU driver builds "
+                                        "from the brick boxes. The program cannot see the steps of that search."};
+    }
+    std::unique_ptr<tracing::IStructureDiagram> diagram(const tracing::DiagramInput& input) const override
+    {
+        return makeHardwareDiagram(input);
+    }
 
     tracing::PrepareReport prepare(const tracing::GpuScene& scene) override
     {
@@ -105,6 +117,7 @@ public:
     void trace(VkCommandBuffer cmd, const tracing::RayBatch& batch) override { dispatch(cmd, batch, nullptr); }
 
     bool countsWork() const override { return true; }
+    bool countsStructureSteps() const override { return false; }
 
     void traceCounting(VkCommandBuffer cmd, const tracing::RayBatch& batch, const tracing::WorkOutput& work) override
     {
@@ -134,10 +147,12 @@ namespace thesis::plugins {
 
 void registerHardwareTracer(tracing::TracerRegistry& registry)
 {
-    registry.add("hardware", "Hardware: the ray tracing cores walk a BVH that the GPU builds (ray queries).",
-                 [](const tracing::TracerEnvironment& environment) {
-                     return std::make_unique<tracers::HardwareTracer>(environment);
-                 });
+    registry.add(
+        "hardware", "Hardware: the ray tracing cores walk a BVH that the GPU builds (ray queries).",
+        [](const tracing::TracerEnvironment& environment) {
+            return std::make_unique<tracers::HardwareTracer>(environment);
+        },
+        core::Pick::Default);
 }
 
 } // namespace thesis::plugins

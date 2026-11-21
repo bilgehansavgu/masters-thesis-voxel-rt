@@ -5,6 +5,7 @@
 import types;
 import closest;
 #include "thesis/shared/Bindings.h"
+#include "thesis/tracers/hardware/HardwareShared.h"
 
 struct TraceParams
 {

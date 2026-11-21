@@ -1,5 +1,7 @@
 #pragma once
 
+// Side: CPU
+
 #include <cstddef>
 #include <span>
 

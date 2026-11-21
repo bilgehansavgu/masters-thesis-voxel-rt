@@ -1,7 +1,8 @@
-/* Bits of the octree of the octree tracer: the ONLY place these numbers are written.
+/* Side: Shared */
+/* Bits and bindings of the octree tracer: the ONLY place these numbers are written.
  *
  * Read by the C++ builder (src/tracers/software_octree) and by trace_software_octree.slang.
- * Like Bindings.h, this file may contain nothing but #defines and comments.
+ * Like thesis/shared/Bindings.h, this file may contain nothing but #defines and comments.
  *
  * The octree stands on a cube of 2^depth cells along each side. A node covers a cube of cells.
  * A node with content has eight children, one for each half along x, y and z. The eight
@@ -17,8 +18,12 @@
  *   LIST      a cube of one cell with several primitives: payload = index of the first entry of
  *             its list in the item buffer. An entry is a primitive, with bit 31 set on the last.
  */
-#ifndef THESIS_SHARED_OCTREE_H
-#define THESIS_SHARED_OCTREE_H
+#ifndef THESIS_TRACERS_OCTREE_SHARED_H
+#define THESIS_TRACERS_OCTREE_SHARED_H
+
+/* Bindings of the tracer itself, inside THESIS_BINDING_TRACER_FIRST .. THESIS_BINDING_TRACER_LAST. */
+#define THESIS_BINDING_OCTREE_NODES 2 /* the node words */
+#define THESIS_BINDING_OCTREE_ITEMS 3 /* the lists of cells with several primitives */
 
 #define THESIS_OCTREE_KIND_SHIFT 30
 #define THESIS_OCTREE_PAYLOAD_MASK 0x3FFFFFFF

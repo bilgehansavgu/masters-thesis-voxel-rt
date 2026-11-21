@@ -36,6 +36,7 @@ find_package(Stb REQUIRED)
 
 enable_testing()
 include(ThesisFormat)
+include(ThesisArchitecture)
 
 add_subdirectory(shared)
 add_subdirectory(src)

@@ -2,6 +2,7 @@
 
 #include "thesis/gpu/Buffer.h"
 #include "thesis/tracers/BuiltInTracers.h"
+#include "thesis/tracing/RayLogBuffer.h"
 
 #include <cstring>
 #include <utility>

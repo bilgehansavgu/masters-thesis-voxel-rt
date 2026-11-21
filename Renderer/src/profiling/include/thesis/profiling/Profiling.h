@@ -1,5 +1,7 @@
 #pragma once
 
+// Side: CPU
+
 // CPU-side profiling markers. They show up on the Tracy timeline when the Tracy profiler is
 // connected and cost almost nothing when it is not (Tracy is built in on-demand mode).
 // GPU-side markers live in thesis/gpu/GpuTimer.h because they need a command buffer.

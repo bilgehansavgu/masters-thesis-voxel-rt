@@ -1,5 +1,7 @@
 #pragma once
 
+// Side: CPU
+
 #include "thesis/core/Scene.h"
 
 #include <glm/vec3.hpp>
@@ -16,6 +18,8 @@ struct CameraFrame {
 };
 
 // Camera that circles a target point; used interactively and for scripted benchmark paths.
+// It can also fly: turnInPlace() and fly() move the eye and carry the target along, so an orbit
+// after a flight circles the point `distance` in front of the eye.
 struct OrbitCamera {
     glm::vec3 target{0.0f};
     float distance = 10.0f;
@@ -24,6 +28,13 @@ struct OrbitCamera {
     float verticalFovDegrees = 60.0f;
 
     [[nodiscard]] CameraFrame frame(float aspectRatio) const;
+    [[nodiscard]] glm::vec3 eye() const;
+
+    // Changes yaw and pitch, keeping the eye where it is (looking around).
+    void turnInPlace(float yawStepDegrees, float pitchStepDegrees);
+    // Moves the eye and the target: `forward` along the view direction, `right` to the side,
+    // `up` along the world up axis.
+    void fly(float forward, float right, float up);
 
     // A camera that shows the whole of `bounds`.
     [[nodiscard]] static OrbitCamera framing(const Bounds& bounds);

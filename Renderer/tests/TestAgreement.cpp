@@ -34,9 +34,7 @@ using namespace thesis;
 
 namespace {
 
-constexpr float kRelativeTolerance = 1e-4f;
-constexpr double kMaxDisagreementFraction = 1e-4; // at most 1 ray in 10,000
-constexpr double kMaxPrimitiveMismatchFraction = 1e-3;
+constexpr float kRelativeTolerance = core::HitComparison::kRelativeTolerance;
 
 // Sends the same camera rays from several viewpoints through every tracer that finds hits and
 // compares the hit lists.
@@ -70,9 +68,7 @@ void checkTracersAgree(const gpu::Context& context, const core::Scene& scene)
                              << ", primitive mismatch " << result.primitiveMismatch << ", attribute mismatch "
                              << result.attributeMismatch << ", max relative error " << result.maxRelativeDistanceError);
             const bool inView = result.bothHit > result.rays / 10; // the scene is actually in view
-            const bool agree = result.disagreementFraction() <= kMaxDisagreementFraction &&
-                               static_cast<double>(result.primitiveMismatch + result.attributeMismatch) <=
-                                   kMaxPrimitiveMismatchFraction * static_cast<double>(result.rays);
+            const bool agree = result.agrees();
             CHECK(inView);
             CHECK(agree);
             if (!inView || !agree) {

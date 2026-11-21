@@ -1,5 +1,7 @@
 #pragma once
 
+// Side: CPU
+
 #include "thesis/metrics/MetricSink.h"
 
 #include <filesystem>

@@ -6,6 +6,7 @@
 #include "thesis/tracers/software_bvh/Bvh.h"
 #include "thesis/tracers/software_grid/UniformGrid.h"
 #include "thesis/tracers/software_octree/Octree.h"
+#include "thesis/tracing/GridFrame.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <glm/glm.hpp>
@@ -51,7 +52,7 @@ const std::vector<core::Aabb> kHintBoxes{
     core::Aabb{{2.0f, 2.25f, 3.5f}, {2.5f, 2.5f, 3.75f}}}; // inside cell (2, 0, 1), touches three borders
 
 // The octree must give, for every cell of its cube, the primitives that the uniform grid lists.
-void checkOctreeAgainstGrid(std::span<const core::Aabb> boxes, const tracers::GridFrame& frame)
+void checkOctreeAgainstGrid(std::span<const core::Aabb> boxes, const tracing::GridFrame& frame)
 {
     const tracers::UniformGrid grid = tracers::buildUniformGrid(boxes, frame);
     const tracers::Octree octree = tracers::buildOctree(boxes, frame);
@@ -86,7 +87,7 @@ void checkOctreeAgainstGrid(std::span<const core::Aabb> boxes, const tracers::Gr
 TEST_CASE("grid without a hint lists a primitive in every cell that its box touches", "[structures][grid]")
 {
     const core::Scene scene = core::makeBoxField({});
-    const tracers::GridFrame frame = tracers::chooseGridFrame(scene.primitiveBounds.size(), scene.bounds, std::nullopt);
+    const tracing::GridFrame frame = tracing::chooseGridFrame(scene.primitiveBounds.size(), scene.bounds, std::nullopt);
     const tracers::UniformGrid grid = tracers::buildUniformGrid(scene.primitiveBounds, frame);
 
     REQUIRE(grid.cellStart.size() == frame.cellCount() + 1);
@@ -123,7 +124,7 @@ TEST_CASE("grid without a hint lists a primitive in every cell that its box touc
 
 TEST_CASE("grid with a hint is the hint and lists each primitive in one cell", "[structures][grid]")
 {
-    const tracers::GridFrame frame = tracers::chooseGridFrame(kHintBoxes.size(), boundsOf(kHintBoxes), kHint);
+    const tracing::GridFrame frame = tracing::chooseGridFrame(kHintBoxes.size(), boundsOf(kHintBoxes), kHint);
     CHECK(frame.origin == kHint.origin);
     CHECK(frame.cellSize == glm::vec3(0.5f));
     CHECK(frame.size == kHint.size);
@@ -141,10 +142,10 @@ TEST_CASE("grid refuses a size that is too large", "[structures][grid]")
     const std::vector<core::Aabb> boxes{core::Aabb{{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}};
     // More cells along one axis than any frame may have.
     CHECK_THROWS(
-        tracers::chooseGridFrame(1, boundsOf(boxes), core::RegularGrid{{0.0f, 0.0f, 0.0f}, 1.0f, {2048, 1, 1}}));
+        tracing::chooseGridFrame(1, boundsOf(boxes), core::RegularGrid{{0.0f, 0.0f, 0.0f}, 1.0f, {2048, 1, 1}}));
     // A frame that is allowed, but too many cells for a grid that stores every cell.
-    const tracers::GridFrame large =
-        tracers::chooseGridFrame(1, boundsOf(boxes), core::RegularGrid{{0.0f, 0.0f, 0.0f}, 1.0f, {1024, 1024, 1024}});
+    const tracing::GridFrame large =
+        tracing::chooseGridFrame(1, boundsOf(boxes), core::RegularGrid{{0.0f, 0.0f, 0.0f}, 1.0f, {1024, 1024, 1024}});
     CHECK_THROWS(tracers::buildUniformGrid(boxes, large));
 }
 
@@ -154,11 +155,11 @@ TEST_CASE("octree gives the primitives of the grid for every cell", "[structures
     {
         const core::Scene scene = core::makeBoxField({.gridSize = 8});
         checkOctreeAgainstGrid(scene.primitiveBounds,
-                               tracers::chooseGridFrame(scene.primitiveBounds.size(), scene.bounds, std::nullopt));
+                               tracing::chooseGridFrame(scene.primitiveBounds.size(), scene.bounds, std::nullopt));
     }
     SECTION("scene with a hint: one cell for each primitive")
     {
-        checkOctreeAgainstGrid(kHintBoxes, tracers::chooseGridFrame(kHintBoxes.size(), boundsOf(kHintBoxes), kHint));
+        checkOctreeAgainstGrid(kHintBoxes, tracing::chooseGridFrame(kHintBoxes.size(), boundsOf(kHintBoxes), kHint));
     }
     SECTION("several primitives in one cell")
     {
@@ -166,7 +167,7 @@ TEST_CASE("octree gives the primitives of the grid for every cell", "[structures
         const std::vector<core::Aabb> boxes{core::Aabb{{1.6f, 2.1f, 3.1f}, {1.7f, 2.2f, 3.2f}},
                                             core::Aabb{{1.1f, 2.1f, 3.1f}, {1.2f, 2.2f, 3.2f}},
                                             core::Aabb{{1.8f, 2.3f, 3.3f}, {1.9f, 2.4f, 3.4f}}};
-        const tracers::GridFrame frame = tracers::chooseGridFrame(boxes.size(), boundsOf(boxes), kHint);
+        const tracing::GridFrame frame = tracing::chooseGridFrame(boxes.size(), boundsOf(boxes), kHint);
         checkOctreeAgainstGrid(boxes, frame);
         const tracers::Octree octree = tracers::buildOctree(boxes, frame);
         CHECK(tracers::lookUp(octree, {1, 0, 0}).primitives == std::vector<std::uint32_t>{0, 2});
@@ -182,7 +183,7 @@ TEST_CASE("octree stores a large and mostly empty grid in little memory", "[stru
                                         core::Aabb{{1023.2f, 1023.2f, 1023.2f}, {1023.8f, 1023.8f, 1023.8f}},
                                         core::Aabb{{511.2f, 3.2f, 700.2f}, {511.8f, 3.8f, 700.8f}}};
     const tracers::Octree octree =
-        tracers::buildOctree(boxes, tracers::chooseGridFrame(boxes.size(), boundsOf(boxes), hint));
+        tracers::buildOctree(boxes, tracing::chooseGridFrame(boxes.size(), boundsOf(boxes), hint));
     CHECK(octree.depth == 10);
     CHECK(octree.nodes.size() <= 8 * 10 * boxes.size()); // at most one tile for each level and primitive
     CHECK(tracers::lookUp(octree, {0, 0, 0}).primitives == std::vector<std::uint32_t>{0});

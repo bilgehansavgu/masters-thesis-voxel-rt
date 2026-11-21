@@ -1,3 +1,4 @@
+/* Side: Shared */
 /* Bits of the hit list entries: the ONLY place these numbers are written.
  *
  * Read by the shaders (tracers, primitive kinds, shading) and by C++ (tests, benchmark).

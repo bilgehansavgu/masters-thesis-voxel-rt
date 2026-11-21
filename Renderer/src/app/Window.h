@@ -1,5 +1,9 @@
 #pragma once
 
+// Side: View
+
+#include "thesis/gpu/StageTiming.h"
+
 #include <vulkan/vulkan.h>
 
 #include <string>
@@ -20,6 +24,8 @@ public:
     [[nodiscard]] GLFWwindow* handle() const { return window_; }
     [[nodiscard]] VkExtent2D framebufferExtent() const;
     [[nodiscard]] bool minimised() const;
+    // True while the window has the keyboard focus (it is the window in front).
+    [[nodiscard]] bool focused() const;
     [[nodiscard]] bool shouldClose() const;
     void requestClose();
 

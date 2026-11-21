@@ -1,5 +1,6 @@
 thesis_add_library(tracer_software_bvh
     SOURCES
+        BvhDiagram.cpp
         Bvh.cpp
         BvhTracer.cpp
     PUBLIC_DEPS thesis::tracing

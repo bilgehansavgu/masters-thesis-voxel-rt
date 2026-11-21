@@ -1,9 +1,10 @@
+/* Side: Shared */
 /* The ray log: the steps of ONE ray, in the order in which the tracer took them. The ONLY place
  * these numbers are written.
  *
  * Only the counting variant of a tracer writes it (shaders/common/work.slang), and only for the
  * ray that the user picked in the window (the ray inspector) or that a test picked. Read by the
- * shaders and by C++ (src/app/RayLogText.cpp turns it into text). Like Bindings.h, this file may
+ * shaders and by C++ (tracing::countWork counts it, src/app/RayLogText.cpp turns it into text). Like Bindings.h, this file may
  * contain nothing but #defines and comments.
  *
  * The buffer at THESIS_BINDING_RAY_LOG holds entries of 8 words (RayLogEntry in types.slang and
@@ -23,11 +24,11 @@
 #define THESIS_RAY_LOG_CAPACITY 4095 /* steps; with the header 4096 entries, 128 KiB */
 #define THESIS_LOG_NO_RAY 0xFFFFFFFF
 
-/* Steps through the search structure of the tracer. The hardware tracer writes none: the GPU
- * does not tell which nodes of its BVH a ray visits. */
-#define THESIS_LOG_GRID_CELL 1   /* a, b, c: the cell (x, y, z) of the uniform grid */
-#define THESIS_LOG_OCTREE_NODE 2 /* a, b, c: the cell of the octree that the ray is in; d: level of the node (its cube has 2^d cells along each side) */
-#define THESIS_LOG_BVH_NODE 3    /* a: the index of the node */
+/* A step through the search structure of the tracer. a to d mean what the tracer says: its shader
+ * names them, and ITracer::describeStructureStep turns them into text. One kind for every tracer, so
+ * code outside the tracer counts the steps without knowing the tracer. The hardware tracer writes
+ * none: the GPU does not tell which nodes of its BVH a ray visits. */
+#define THESIS_LOG_STRUCTURE_STEP 1
 
 /* The primitives. */
 #define THESIS_LOG_PRIMITIVE 4   /* a: the primitive (for a voxel model: the brick) that the ray is tested against */

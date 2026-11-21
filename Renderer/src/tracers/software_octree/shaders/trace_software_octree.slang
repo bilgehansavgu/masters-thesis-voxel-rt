@@ -1,6 +1,6 @@
 // Octree tracer: our own search structure, a sparse octree, walked in a compute shader.
 //
-// The octree stands on a cube of 2^depth cells along each side (Octree.h, thesis/shared/Octree.h).
+// The octree stands on a cube of 2^depth cells along each side (Octree.h, OctreeShared.h).
 // A part of space without a primitive is one EMPTY word, however large it is. The ray goes
 // from node to node, front to back:
 //
@@ -20,7 +20,7 @@ import aabb;
 import closest;
 #include "thesis/shared/Bindings.h"
 #include "thesis/shared/RayLog.h"
-#include "thesis/shared/Octree.h"
+#include "thesis/tracers/software_octree/OctreeShared.h"
 
 struct TraceParams
 {
@@ -70,7 +70,9 @@ void main(uint3 threadId : SV_DispatchThreadID)
             uint payload = 0;
             for (;;)
             {
-                closest.work.structureStep(THESIS_LOG_OCTREE_NODE, uint(cell.x), uint(cell.y), uint(cell.z), level);
+                // Ray log structure step: a, b, c = the cell the ray is in; d = level of the node, its cube
+                // has 2^d cells along each side (OctreeTracer::describeStructureStep).
+                closest.work.structureStep(uint(cell.x), uint(cell.y), uint(cell.z), level);
                 tiles[level] = tile;
                 const uint child = ((uint(cell.x) >> level) & 1) | (((uint(cell.y) >> level) & 1) << 1) |
                                    (((uint(cell.z) >> level) & 1) << 2);

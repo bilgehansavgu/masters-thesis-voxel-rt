@@ -1,6 +1,5 @@
 thesis_add_library(tracer_hardware
     SOURCES
-        HardwareDiagram.cpp
         HardwareTracer.cpp
     PUBLIC_DEPS thesis::tracing
     FOLDER "tracers")

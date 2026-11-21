@@ -1,8 +1,9 @@
 # Thesis Renderer
 
 Testbed for ray tracing compressed voxel data on GPUs with ray tracing hardware: the GPU's own
-search structure (hardware tracer) against our own (software tracers: grid, octree, BVH),
-behind one interface.
+search structure (hardware tracers: ray queries, and a ray tracing pipeline with and without
+shader execution reordering) against our own (software tracers: grid, octree, BVH), behind one
+interface.
 
 ## The idea in one picture
 
@@ -20,12 +21,15 @@ WHEN A MODEL IS LOADED, and again when the encoding is switched
 
 EVERY FRAME
   camera rays → [ TRACER SOCKET ] → hits → shading → screen
-                  ├─ hardware          Vulkan ray queries walk a GPU-built BVH
-                  ├─ software_grid     compute shader, walks our own uniform grid
-                  ├─ software_octree   compute shader, walks our own sparse octree
-                  ├─ software_bvh      compute shader, walks our own binary BVH (SAH build on the CPU)
-                  ├─ null              baseline: moves rays and hits, searches nothing
-                  └─ (later)           OptiX, ray tracing pipeline, ...
+                  ├─ hardware                       Vulkan ray queries walk a GPU-built BVH
+                  ├─ hardware_pipeline              the same BVH, ray tracing pipeline: brick test in an intersection shader
+                  ├─ hardware_pipeline_reorder_hit  + shader execution reordering after the hit (a control)
+                  ├─ hardware_pipeline_reorder_box  BVH finds the first box, rays regrouped by box, then the brick test
+                  ├─ software_grid                  compute shader, walks our own uniform grid
+                  ├─ software_octree                compute shader, walks our own sparse octree
+                  ├─ software_bvh                   compute shader, walks our own binary BVH (SAH build on the CPU)
+                  ├─ null                           baseline: moves rays and hits, searches nothing
+                  └─ (later)                        OptiX, only if the professor wants it
 
   every stage is timed on the GPU; Tracy shows it live, results files keep it
 ```
@@ -47,6 +51,14 @@ that the ray passes above or below. It finds the same hits as the walk without t
 the tolerance of the agreement test (relative distance 1e-4, `thesis/core/HitComparison.h`). The software tracers
 walk a uniform grid, a sparse octree or a binary BVH of their own. The window shows what each
 ray does: work views, live averages, and the ray inspector, which lists every step of one ray.
+
+The hardware tracers all walk the same GPU-built BVH (`tracing::BoxBvh`). `hardware` asks it
+from a compute shader (ray queries). The `hardware_pipeline` tracers run a ray tracing pipeline
+(`vkCmdTraceRays`, the model OptiX uses), and two of them regroup the rays with shader execution
+reordering (SER, `VK_NV_ray_tracing_invocation_reorder`). `hardware_pipeline_reorder_box` is
+exact only when no two primitive boxes overlap (bricks and the box field do not); for other
+scenes it says so and is skipped. On a GPU without ray tracing pipelines or without active
+reordering, the tracers that need them are skipped with the reason.
 
 ## Building
 
@@ -70,7 +82,7 @@ Code rules the build enforces:
   shaders both include. The bits of the brick format are written once, in
   `shared/include/thesis/shared/Brick2012.h`.
 - **Shader interfaces are checked.** The shader compiler writes a layout report (`<shader>.json`)
-  next to each `.spv`. Creating a kernel fails with a clear message if a shader reads a binding
+  next to each `.spv`. Creating a kernel or ray tracing pipeline fails with a clear message if a shader reads a binding
   the C++ side does not provide, with the wrong type, or expects a different push-constant
   size; `TestShaderLayouts` compares Ray, Hit, RayWork, Aabb and the structs of the brick
   buffers field by field.
@@ -133,7 +145,7 @@ have none.
 structure of the tracer at the **Cut height**: grid cells, octree cubes, BVH boxes at one **Tree
 level**, or the brick boxes that the GPU gets for its own tree, with their counts. **Pick a pixel**
 (or a right click without moving) records its ray on the GPU; the arrow keys step through its
-stages: the ray, the search (cells, cubes or boxes visited, in gold; for hardware only the bricks
+stages: the ray, the search (cells, cubes or boxes visited, in gold; for the hardware tracers only the bricks
 that the GPU handed over), the brick, the columns inside the brick, and the voxel it hit. **Side
 view** (key V) shows the ray from the side. Another tracer records the same pixel again and shows
 the work of both. **Ray log** lists every recorded step. Lines behind the model are drawn faint:
@@ -176,7 +188,7 @@ panel always belong to what is on screen.
 | 5 | Lit with the face of the voxel cube: shows the voxels |
 | 6, 7, 8 | Work of each ray: cells visited, primitives tested, runs tested |
 | 9 | Kind of the cell at the hit: green one voxel, blue one run, red several runs |
-| 0 | Steps through the tracer's own search structure (the hardware tracer cannot count them) |
+| 0 | Steps through the tracer's own search structure (the hardware tracers cannot count them) |
 | - | Mipmap cells read |
 | = | The largest mipmap square that the walk skipped: blue 2x2 cells, green 4x4, yellow 8x8, orange 16x16, red 32x32 |
 
@@ -187,7 +199,7 @@ work view on, the panel also shows the average work of a ray in the frame, about
 The **ray inspector** lists every step of one ray in order: the cells or nodes of the search
 structure, the primitives it was tested against, and inside each brick the mipmap squares (with
 their lowest and highest voxel, and whether the ray skipped them), the cells and the runs, then
-the hit. "Copy as text" puts the list on the clipboard. The hardware tracer cannot report the
+the hit. "Copy as text" puts the list on the clipboard. The hardware tracers cannot report the
 nodes of its BVH, so its list starts at the primitives.
 
 `--benchmark` is headless and writes `results/<time>_<tracer>[_<encoding>].json`.

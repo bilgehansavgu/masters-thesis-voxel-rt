@@ -41,6 +41,11 @@ struct DeviceInfo {
     std::uint32_t timestampValidBits = 64;
     VkDeviceSize minScratchOffsetAlignment = 256;
     VkDeviceSize deviceLocalBytes = 0;
+    // Shader binding table layout of ray tracing pipelines (VkPhysicalDeviceRayTracingPipelinePropertiesKHR).
+    // Zero when the device has no ray tracing pipelines.
+    std::uint32_t shaderGroupHandleSize = 0;
+    std::uint32_t shaderGroupHandleAlignment = 0;
+    std::uint32_t shaderGroupBaseAlignment = 0;
 };
 
 // Number of validation warnings and errors reported since the program started.
@@ -75,6 +80,15 @@ public:
     // (VK_KHR_pipeline_executable_properties). ComputeKernel::statistics() has the numbers.
     [[nodiscard]] bool pipelineStatistics() const { return pipelineStatistics_; }
 
+    // True if ray tracing pipelines (VK_KHR_ray_tracing_pipeline) are on: RayTracingPipeline needs them.
+    // Optional, because the tracers built on ray queries do not.
+    [[nodiscard]] bool rayTracingPipelines() const { return rayTracingPipelines_; }
+
+    // True if shader execution reordering (VK_NV_ray_tracing_invocation_reorder) is on AND the
+    // driver says that it really reorders. A driver may accept the reorder calls and ignore them;
+    // that case reports false here, because a measurement of it would measure nothing.
+    [[nodiscard]] bool invocationReorder() const { return invocationReorder_; }
+
     // Bytes of device-local memory currently in use by this process (VK_EXT_memory_budget).
     [[nodiscard]] VkDeviceSize deviceLocalUsage() const;
 
@@ -97,6 +111,8 @@ private:
     DeviceInfo info_{};
     bool memoryBudget_ = false;
     bool pipelineStatistics_ = false;
+    bool rayTracingPipelines_ = false;
+    bool invocationReorder_ = false;
     PFN_vkCmdBeginDebugUtilsLabelEXT beginLabel_ = nullptr;
     PFN_vkCmdEndDebugUtilsLabelEXT endLabel_ = nullptr;
 

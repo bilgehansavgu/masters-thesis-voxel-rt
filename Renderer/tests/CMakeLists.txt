@@ -26,6 +26,7 @@ target_link_libraries(thesis_tests PRIVATE
     thesis::workloads
     thesis::resolve
     thesis::tracer_plugins
+    thesis::tracer_hardware_pipeline
     thesis::tracer_software_grid
     thesis::tracer_software_octree
     thesis::tracer_software_bvh

@@ -13,7 +13,7 @@
 //
 // PrimitiveHit is in shaders/common/types.slang. WorkCounter (shaders/common/work.slang) counts
 // the work for diagnosis and costs nothing in the timed shaders. Binding 8 of set 0 holds the
-// bounds (StructuredBuffer<Aabb>). Bindings 9..15 are the kind's own data, uploaded from
+// bounds (gPrimitiveBounds in shaders/common/bounds.slang). Bindings 9..15 are the kind's own data, uploaded from
 // core::Scene::primitiveData.
 //
 // Every tracer is compiled once per kind and only calls these two, through ClosestHit
@@ -23,10 +23,7 @@
 import types;
 import work;
 import aabb;
-#include "thesis/shared/Bindings.h"
-
-[[vk::binding(THESIS_BINDING_PRIMITIVE_BOUNDS, 0)]]
-StructuredBuffer<Aabb> gPrimitiveBounds;
+import bounds;
 
 public bool intersectPrimitive(Ray ray, uint primitiveId, out PrimitiveHit hit, inout WorkCounter work)
 {

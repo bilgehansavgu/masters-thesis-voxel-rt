@@ -1,12 +1,17 @@
 thesis_add_library(tracing
     SOURCES
+        BoxBvh.cpp
         GpuScene.cpp
         GridFrame.cpp
+        HiddenStructureDiagram.cpp
         RayBatch.cpp
         RayLog.cpp
         RayLogBuffer.cpp
         StructureDiagram.cpp
         TraceKernels.cpp
+        TracePipelines.cpp
+        TraceShaders.cpp
+        TraceShaders.h
     PUBLIC_DEPS
         thesis::core
         thesis::gpu

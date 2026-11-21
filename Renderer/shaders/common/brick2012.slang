@@ -15,6 +15,7 @@
 
 import types;
 import work;
+import bounds;
 #include "thesis/shared/Bindings.h"
 #include "thesis/shared/Brick2012.h"
 #include "thesis/shared/Hit.h"
@@ -41,8 +42,6 @@ public struct BrickRecord
     public uint attributeBase;   // split layout: index of the brick's first normal
 };
 
-[[vk::binding(THESIS_BINDING_PRIMITIVE_BOUNDS, 0)]]
-public StructuredBuffer<Aabb> gPrimitiveBounds;
 [[vk::binding(THESIS_BINDING_BRICK_HEADER, 0)]]
 public StructuredBuffer<BrickModelHeader> gBrickHeader;
 [[vk::binding(THESIS_BINDING_BRICK_TABLE, 0)]]

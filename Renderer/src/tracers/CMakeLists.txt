@@ -4,6 +4,7 @@ add_subdirectory(software_grid)
 add_subdirectory(software_octree)
 add_subdirectory(software_bvh)
 add_subdirectory(hardware)
+add_subdirectory(hardware_pipeline)
 add_subdirectory(null)
 
 # thesis::tracer_plugins exposes registerBuiltInTracers(), generated from the registrations above.

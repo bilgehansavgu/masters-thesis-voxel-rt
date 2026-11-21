@@ -45,6 +45,19 @@ public struct WorkCounter
         return counter;
     }
 
+    // Continues the count that an earlier shader of the same ray stored. A ray tracing pipeline
+    // runs one ray in several shaders (ray generation, intersection, closest hit), one after
+    // the other on the same thread, so the count passes through the work list between them.
+    public static WorkCounter resume(uint rayIndex)
+    {
+        WorkCounter counter;
+        counter.work = gRayWork[rayIndex];
+        counter.logging = gRayLog[0].kind == rayIndex;
+        counter.logged = counter.logging ? gRayLog[0].a : 0;
+        counter.lost = counter.logging ? gRayLog[0].b : 0;
+        return counter;
+    }
+
     [mutating] void log(uint kind, uint a, uint b, uint c, uint d, uint e, uint f, float t)
     {
         if (!logging)
@@ -140,6 +153,12 @@ public struct WorkCounter
 public struct WorkCounter
 {
     public static WorkCounter start(uint rayIndex)
+    {
+        WorkCounter counter;
+        return counter;
+    }
+
+    public static WorkCounter resume(uint rayIndex)
     {
         WorkCounter counter;
         return counter;

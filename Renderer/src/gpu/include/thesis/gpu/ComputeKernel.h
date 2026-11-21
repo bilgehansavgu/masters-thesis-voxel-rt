@@ -41,8 +41,11 @@ public:
     KernelResources& storageImage(std::uint32_t binding, VkImageView view);
     KernelResources& accelerationStructure(std::uint32_t binding, VkAccelerationStructureKHR structure);
 
+    // Records the resources into `cmd` as push descriptors of set 0 of `layout`.
+    void push(const Context& context, VkCommandBuffer cmd, VkPipelineBindPoint bindPoint,
+              VkPipelineLayout layout) const;
+
 private:
-    friend class ComputeKernel;
     struct Entry {
         std::uint32_t binding;
         VkDescriptorType type;
@@ -82,8 +85,6 @@ public:
     [[nodiscard]] const std::vector<ShaderStatistic>& statistics() const { return statistics_; }
 
 private:
-    void readStatistics();
-
     const Context& context_;
     std::string name_;
     std::uint32_t pushConstantSize_ = 0;

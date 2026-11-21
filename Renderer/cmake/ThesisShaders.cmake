@@ -16,23 +16,34 @@ set(THESIS_SHADER_OUTPUT_DIR "${CMAKE_BINARY_DIR}/shaders")
 option(THESIS_SHADER_DEBUG_INFO "Embed debug info in SPIR-V (for Nsight shader debugging)" OFF)
 
 # thesis_add_shaders(OWNER <target> SOURCES <file.slang>... [PER_PRIMITIVE] [COUNTING]
-#                    [CAPABILITIES <cap>...])
+#                    [RAY_TRACING] [CAPABILITIES <cap>...])
 #
-# Compiles each source (entry point `main`, compute stage). Output name is the source's base name,
+# Compiles each source (entry point `main`, compute stage). With RAY_TRACING, every entry point
+# marked [shader("...")] goes into one SPIR-V file instead, and gpu::RayTracingPipeline picks
+# the ones it uses by name. Output name is the source's base name,
 # or <base>.<kind> for every kind in THESIS_PRIMITIVE_KINDS when PER_PRIMITIVE is given.
 # COUNTING compiles each output a second time as <name>.counting, with THESIS_COUNT_WORK defined:
 # the variant that counts the work of each ray (shaders/common/work.slang). It is never timed.
 # CAPABILITIES are extra Slang capabilities the shaders need (e.g. spvRayQueryKHR).
 # A custom target <OWNER>_shaders is created in the calling directory and OWNER depends on it.
 function(thesis_add_shaders)
-    cmake_parse_arguments(ARG "PER_PRIMITIVE;COUNTING" "OWNER" "SOURCES;CAPABILITIES" ${ARGN})
+    cmake_parse_arguments(ARG "PER_PRIMITIVE;COUNTING;RAY_TRACING" "OWNER" "SOURCES;CAPABILITIES" ${ARGN})
 
     file(GLOB_RECURSE shared_modules CONFIGURE_DEPENDS
         "${THESIS_SHADER_ROOT}/*.slang" "${THESIS_SHARED_INCLUDE_DIR}/*.h")
-    set(flags -target spirv -profile spirv_1_6 -entry main -stage compute -O2
+    set(flags -target spirv -profile spirv_1_6 -O2
               -warnings-as-errors all
               -I "${THESIS_SHADER_ROOT}/common"
               -I "${THESIS_SHARED_INCLUDE_DIR}")
+    if(NOT ARG_RAY_TRACING)
+        list(APPEND flags -entry main -stage compute)
+    endif()
+    # A library's own shaders/ folder may hold modules that several of its sources import.
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
+        file(GLOB own_modules CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.slang")
+        list(APPEND shared_modules ${own_modules})
+        list(APPEND flags -I "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
+    endif()
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/include")
         file(GLOB_RECURSE own_headers CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/include/*.h")
         list(APPEND shared_modules ${own_headers})

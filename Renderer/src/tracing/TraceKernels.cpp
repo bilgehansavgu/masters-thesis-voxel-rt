@@ -1,6 +1,6 @@
 #include "thesis/tracing/TraceKernels.h"
 
-#include "thesis/tracing/Bindings.h"
+#include "TraceShaders.h"
 
 #include <stdexcept>
 
@@ -24,19 +24,9 @@ std::vector<gpu::ShaderStatistic> TraceKernels::prepare(const GpuScene& scene)
 
 void TraceKernels::create(std::optional<gpu::ComputeKernel>& kernel, bool counting) const
 {
-    std::vector<gpu::KernelBinding> bindings{{kRayBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-                                             {kHitBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}};
-    bindings.insert(bindings.end(), ownBindings_.begin(), ownBindings_.end());
-    if (counting) {
-        bindings.push_back({kRayWorkBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER});
-        bindings.push_back({kRayLogBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER});
-    }
-    for (const gpu::KernelBinding& binding : scene_->primitiveBindings()) {
-        bindings.push_back(binding);
-    }
-    const std::string file = shaderName_ + "." + scene_->primitiveKind + (counting ? ".counting.spv" : ".spv");
     kernel.emplace(environment_.gpu,
-                   gpu::KernelDescription{environment_.shaderDirectory / file, std::move(bindings), pushConstantSize_});
+                   gpu::KernelDescription{traceShaderPath(environment_, shaderName_, *scene_, counting),
+                                          traceBindings(ownBindings_, *scene_, counting), pushConstantSize_});
 }
 
 void TraceKernels::dispatch(VkCommandBuffer cmd, const RayBatch& batch, gpu::KernelResources resources,
@@ -48,11 +38,7 @@ void TraceKernels::dispatch(VkCommandBuffer cmd, const RayBatch& batch, gpu::Ker
     if (work != nullptr && !counting_) {
         create(counting_, true);
     }
-    resources.buffer(kRayBinding, batch.rays).buffer(kHitBinding, batch.hits);
-    if (work != nullptr) {
-        resources.buffer(kRayWorkBinding, work->perRay).buffer(kRayLogBinding, work->log);
-    }
-    scene_->bindPrimitiveData(resources);
+    bindTraceResources(resources, batch, *scene_, work);
     const gpu::ComputeKernel& kernel = work != nullptr ? *counting_ : *timed_;
     kernel.dispatch(cmd, resources, gpu::groupCount(batch.count(), kTraceGroupSize), 1, 1, params, paramsSize);
 }

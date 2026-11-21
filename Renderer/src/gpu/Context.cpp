@@ -115,6 +115,24 @@ Context::Context(const ContextOptions& options)
     pipelineStatistics_ =
         physicalDevice_.enable_extension_if_present(VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME) &&
         physicalDevice_.enable_extension_features_if_present(executableFeatures);
+    // Ray tracing pipelines and shader execution reordering: optional, because only the tracers
+    // built on them need them. Such a tracer checks rayTracingPipelines() and invocationReorder()
+    // and refuses the scene (UnsupportedScene) when they are off.
+    VkPhysicalDeviceRayTracingPipelineFeaturesKHR pipelineFeatures{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR};
+    pipelineFeatures.rayTracingPipeline = VK_TRUE;
+    rayTracingPipelines_ = physicalDevice_.enable_extension_if_present(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME) &&
+                           physicalDevice_.enable_extension_features_if_present(pipelineFeatures);
+    // WHY the NV extension and not the cross-vendor EXT one: the Vulkan headers of this build
+    // (vcpkg, header version 309) only know the NV one.
+    VkPhysicalDeviceRayTracingInvocationReorderFeaturesNV reorderFeatures{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_NV};
+    reorderFeatures.rayTracingInvocationReorder = VK_TRUE;
+    // queryDeviceInfo() turns this off again if the driver says that it does not reorder.
+    invocationReorder_ =
+        rayTracingPipelines_ &&
+        physicalDevice_.enable_extension_if_present(VK_NV_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME) &&
+        physicalDevice_.enable_extension_features_if_present(reorderFeatures);
 
     device_ = unwrap(vkb::DeviceBuilder(physicalDevice_).build(), "Creating the Vulkan device");
     dispatch_ = device_.make_table();
@@ -179,9 +197,26 @@ void Context::queryDeviceInfo()
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR};
     VkPhysicalDeviceVulkan12Properties properties12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES};
     properties12.pNext = &accelerationProperties;
+    // The structs of optional extensions go into the chain only when the extension is on.
+    VkPhysicalDeviceRayTracingPipelinePropertiesKHR pipelineProperties{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR};
+    VkPhysicalDeviceRayTracingInvocationReorderPropertiesNV reorderProperties{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_PROPERTIES_NV};
+    if (rayTracingPipelines_) {
+        accelerationProperties.pNext = &pipelineProperties;
+    }
+    if (invocationReorder_) {
+        pipelineProperties.pNext = &reorderProperties;
+    }
     VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
     properties.pNext = &properties12;
     vkGetPhysicalDeviceProperties2(physicalDevice(), &properties);
+
+    info_.shaderGroupHandleSize = pipelineProperties.shaderGroupHandleSize;
+    info_.shaderGroupHandleAlignment = pipelineProperties.shaderGroupHandleAlignment;
+    info_.shaderGroupBaseAlignment = pipelineProperties.shaderGroupBaseAlignment;
+    invocationReorder_ = invocationReorder_ && reorderProperties.rayTracingInvocationReorderReorderingHint ==
+                                                   VK_RAY_TRACING_INVOCATION_REORDER_MODE_REORDER_NV;
 
     info_.name = properties.properties.deviceName;
     info_.driverName = properties12.driverName;

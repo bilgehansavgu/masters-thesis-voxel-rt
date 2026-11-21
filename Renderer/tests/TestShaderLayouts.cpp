@@ -114,11 +114,22 @@ std::map<std::string, std::vector<Field>> cppLayouts()
     };
 }
 
-// Collects every struct named `name` anywhere in a reflection report, with its field layout.
+// True if the fields of a reflected struct have a layout in memory (byte offsets). In a ray tracing
+// shader the same struct can also be a ray payload or hit attributes, which the driver stores in
+// its own way: those fields have no offset, and no C++ side reads them.
+bool hasMemoryLayout(const nlohmann::json& structNode)
+{
+    const nlohmann::json& fields = structNode.at("fields");
+    return !fields.empty() && fields.front().at("binding").value("kind", "") == "uniform";
+}
+
+// Collects every struct named `name` anywhere in a reflection report that has a layout in memory,
+// with its field layout.
 void findStructs(const nlohmann::json& node, const std::string& name, std::vector<std::vector<Field>>& found)
 {
     if (node.is_object()) {
-        if (node.value("kind", "") == "struct" && node.value("name", "") == name && node.contains("fields")) {
+        if (node.value("kind", "") == "struct" && node.value("name", "") == name && node.contains("fields") &&
+            hasMemoryLayout(node)) {
             std::vector<Field> fields;
             for (const nlohmann::json& field : node.at("fields")) {
                 const nlohmann::json& binding = field.at("binding");

@@ -28,6 +28,31 @@ public struct ClosestHit
         return closest;
     }
 
+    // For a shader of a ray tracing pipeline that runs in the middle of a ray (an intersection
+    // shader): the closest hit so far is only known as a distance, the ray's tMax (RayTCurrent),
+    // and the work so far is in the work list (WorkCounter.resume).
+    public static ClosestHit resume(Ray ray, uint rayIndex)
+    {
+        ClosestHit closest = none(ray, rayIndex);
+        closest.work = WorkCounter.resume(rayIndex);
+        return closest;
+    }
+
+    // The hit that an earlier shader of the same ray found and the hardware kept as the closest
+    // (in a ray tracing pipeline's closest-hit shader). finish() then reads its attributes.
+    public static ClosestHit found(uint primitiveId, PrimitiveHit hit, uint rayIndex)
+    {
+        ClosestHit closest;
+        closest.t = hit.t;
+        closest.primitive = primitiveId;
+        closest.hit = hit;
+        closest.work = WorkCounter.resume(rayIndex);
+        return closest;
+    }
+
+    // What the primitive kind reported for the closest hit (valid when primitive != kNoHit).
+    public PrimitiveHit primitiveHit() { return hit; }
+
     // Tests the ray against one primitive. Returns true if that primitive is now the closest hit.
     // The test ends at the closest hit so far: nothing behind it can matter.
     [mutating] public bool test(Ray ray, uint primitiveId)

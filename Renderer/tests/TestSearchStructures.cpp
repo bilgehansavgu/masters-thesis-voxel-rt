@@ -3,6 +3,7 @@
 // find the right hits?) are TestAgreement.cpp and TestBrickTracing.cpp.
 
 #include "thesis/core/BoxField.h"
+#include "thesis/tracers/hardware_pipeline/BoxOverlap.h"
 #include "thesis/tracers/software_bvh/Bvh.h"
 #include "thesis/tracers/software_grid/UniformGrid.h"
 #include "thesis/tracers/software_octree/Octree.h"
@@ -250,4 +251,40 @@ TEST_CASE("BVH handles one primitive and primitives at the same place", "[struct
     const tracers::Bvh same = tracers::buildBvh(std::vector<core::Aabb>(100, box));
     CHECK(same.nodes.size() == 199);
     CHECK(same.depth <= 8);
+}
+
+// The tracer that walks the boxes front to back (hardware_pipeline_reorder_box) is exact only
+// for boxes that do not overlap, and refuses a scene when this check finds a pair.
+TEST_CASE("box overlap check tells touching boxes from overlapping ones", "[structures][overlap]")
+{
+    const auto frameOf = [](std::span<const core::Aabb> boxes) {
+        return tracing::chooseGridFrame(boxes.size(), boundsOf(boxes), std::nullopt);
+    };
+
+    // The box field: towers stand on the ground slab and touch it, nothing overlaps.
+    const core::Scene field = core::makeBoxField({});
+    CHECK_FALSE(tracers::findBoxOverlap(field.primitiveBounds, frameOf(field.primitiveBounds)));
+
+    // Neighbours that share a face, an edge and a corner only touch.
+    const std::vector<core::Aabb> touching{
+        core::Aabb{{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}, core::Aabb{{1.0f, 0.0f, 0.0f}, {2.0f, 1.0f, 1.0f}},
+        core::Aabb{{1.0f, 1.0f, 0.0f}, {2.0f, 2.0f, 1.0f}}, core::Aabb{{1.0f, 1.0f, 1.0f}, {2.0f, 2.0f, 2.0f}}};
+    CHECK_FALSE(tracers::findBoxOverlap(touching, frameOf(touching)));
+
+    // A small box inside a large one, far apart in the list and in cells of their own.
+    std::vector<core::Aabb> nested = touching;
+    nested.push_back(core::Aabb{{5.0f, 5.0f, 5.0f}, {9.0f, 9.0f, 9.0f}});
+    nested.push_back(core::Aabb{{7.0f, 7.0f, 7.0f}, {7.5f, 7.5f, 7.5f}});
+    const std::optional<tracers::BoxOverlap> found = tracers::findBoxOverlap(nested, frameOf(nested));
+    REQUIRE(found);
+    CHECK(found->first == 4);
+    CHECK(found->second == 5);
+
+    // The same with the frame of a hint: each box inside one cell, two boxes in the same cell.
+    const std::vector<core::Aabb> sameCell{kHintBoxes[0], kHintBoxes[1],
+                                           core::Aabb{{2.5f, 2.5f, 4.0f}, {2.8f, 2.8f, 4.2f}}};
+    tracing::GridFrame hintFrame = tracing::chooseGridFrame(sameCell.size(), boundsOf(sameCell), kHint);
+    CHECK(tracers::findBoxOverlap(sameCell, hintFrame));
+    CHECK_FALSE(
+        tracers::findBoxOverlap(kHintBoxes, tracing::chooseGridFrame(kHintBoxes.size(), boundsOf(kHintBoxes), kHint)));
 }

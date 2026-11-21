@@ -132,9 +132,9 @@ Renderer/
   encoding/     CPU. Encoding socket: IEncoding, memory report
   encodings/    CPU. Encoding plugin. brick2012/ = both bit layout, with and without mipmap
   profiling/    CPU marker on Tracy timeline
-  gpu/          GPU. Thin Vulkan: device, buffer, image, kernel, timer, acceleration structure
-  tracing/      GPU. Tracer socket: ITracer, ray batch, GPU scene, trace kernel, ray log, grid frame
-  tracers/      GPU. Tracer plugin: hardware, software_grid, software_octree, software_bvh, null
+  gpu/          GPU. Thin Vulkan: device, buffer, image, compute kernel, ray tracing pipeline, timer, acceleration structure
+  tracing/      GPU. Tracer socket: ITracer, ray batch, GPU scene, trace kernel, trace pipeline, box BVH, ray log, grid frame
+  tracers/      GPU. Tracer plugin: hardware, hardware_pipeline, software_grid, software_octree, software_bvh, null
   workloads/    GPU. Ray maker: camera rays. Know no tracer
   resolve/      GPU. Hit list -> image. Know no tracer
   metrics/      CPU. Measurement output socket: Tracy plot, JSON results file, system state
@@ -155,7 +155,7 @@ In `src/`, never make `utils`, `helpers` or `managers` (test helper in `tests/` 
 Find thing: know owner -> open owner folder. Know class -> file name match class.
 
 ### 4.1 Extend
-- **New tracer**: `src/tracers/<name>/` with `ITracer` (`text()`; `diagram()` and `describeStructureStep()` if it has structure), shader, `<Name>Shared.h` for own binding (slot 2..6) and bits, `CMakeLists.txt` calling `thesis_register_plugin(SOCKET TRACER ...)`. Add folder in `src/tracers/CMakeLists.txt`. Agreement test cover it without change.
+- **New tracer**: `src/tracers/<name>/` with `ITracer` (`text()`; `diagram()` and `describeStructureStep()` if it has structure), shader, `<Name>Shared.h` for own binding (slot 2..6) and bits, `CMakeLists.txt` calling `thesis_register_plugin(SOCKET TRACER ...)`. Add folder in `src/tracers/CMakeLists.txt`. Agreement test cover it without change. Compute shader tracer stand on `TraceKernels`. Ray tracing pipeline tracer stand on `TracePipelines`, shader built with `thesis_add_shaders(... RAY_TRACING)`. Tracer that let GPU search use `BoxBvh`, so all walk same tree. One plugin may register several tracer, one per question. Example: `hardware_pipeline` register three.
 - **New encoding**: `src/encodings/<name>/` with `IEncoding`, `CMakeLists.txt` calling `thesis_register_plugin(SOCKET ENCODING ...)`. Add folder in `src/encodings/CMakeLists.txt`. Add primitive kind of same name. Round trip test, cube-by-cube test, report tool, benchmark and panel pick it up without change.
 - **New bit layout of 2012 format**: brick test shared. Kind's `primitive.slang` give only four function of `IBrickLayout`.
 - **New primitive kind**: `shaders/primitives/<kind>/primitive.slang` keep contract in `shaders/primitives/box/primitive.slang`. Add kind to `THESIS_PRIMITIVE_KINDS` in `CMakeLists.txt`. Kind buffer go in `core::Scene::primitiveData` (binding 9..15). Tracer pass it through, never read it.
@@ -176,7 +176,8 @@ Find thing: know owner -> open owner folder. Know class -> file name match class
 ## 6. Decision Already Made
 Do not argue these again without human. Why of each live in wiki decision table.
 - Voxels only. Input is triangle mesh, voxelized offline. Data in-core.
-- Vulkan first. Hardware tracer = ray queries. Software tracer = compute shader. OptiX later only as plugin, only if professor want.
+- Vulkan first. Hardware tracer = ray queries. Hardware pipeline tracer = ray tracing pipeline, same model as OptiX, with and without shader execution reordering (SER). Software tracer = compute shader. OptiX later only as plugin, only if professor want.
+- SER through `VK_NV_ray_tracing_invocation_reorder`, not EXT: vcpkg Vulkan header (version 309) know only NV. Switch to EXT = vcpkg baseline bump = ask human.
 - Slang for every shader. SPIR-V compiled at build time.
 - Bit layout of 2012 format is our design. Paper not specify it. Never credit paper for it.
 - Plugin registered by CMake, not by static object, not by hand list.

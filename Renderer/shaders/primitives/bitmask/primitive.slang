@@ -12,6 +12,7 @@
 
 import types;
 import work;
+import bounds;
 #include "thesis/shared/Bindings.h"
 #include "thesis/shared/Bitmask.h"
 #include "thesis/shared/Brick2012.h" // THESIS_CELL_*: the column kinds that the ray log names
@@ -37,8 +38,6 @@ public struct BitmaskBrickRecord
     public uint normalBase; // index of the brick's first normal
 };
 
-[[vk::binding(THESIS_BINDING_PRIMITIVE_BOUNDS, 0)]]
-StructuredBuffer<Aabb> gPrimitiveBounds;
 [[vk::binding(THESIS_BINDING_BITMASK_HEADER, 0)]]
 StructuredBuffer<BitmaskModelHeader> gBitmaskHeader;
 [[vk::binding(THESIS_BINDING_BITMASK_TABLE, 0)]]

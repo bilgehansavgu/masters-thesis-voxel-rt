@@ -1,118 +1,14 @@
 #include "thesis/gpu/ComputeKernel.h"
 
+#include "ShaderInterface.h"
 #include "thesis/gpu/Buffer.h"
 #include "thesis/gpu/Check.h"
 #include "thesis/gpu/Context.h"
 
-#include <nlohmann/json.hpp>
-
-#include <algorithm>
-#include <fstream>
 #include <stdexcept>
 #include <string>
 
 namespace thesis::gpu {
-namespace {
-
-std::vector<std::uint32_t> readSpirv(const std::filesystem::path& path)
-{
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file) {
-        throw std::runtime_error("Cannot open shader '" + path.string() + "'. Was it built? (target *_shaders)");
-    }
-    const auto size = static_cast<std::size_t>(file.tellg());
-    if (size == 0 || size % 4 != 0) {
-        throw std::runtime_error("Shader '" + path.string() + "' is not valid SPIR-V");
-    }
-    std::vector<std::uint32_t> words(size / 4);
-    file.seekg(0);
-    file.read(reinterpret_cast<char*>(words.data()), static_cast<std::streamsize>(size));
-    return words;
-}
-
-const char* descriptorTypeName(VkDescriptorType type)
-{
-    switch (type) {
-    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
-        return "storage buffer";
-    case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
-        return "storage image";
-    case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
-        return "acceleration structure";
-    default:
-        return "other";
-    }
-}
-
-// The descriptor type a reflected shader parameter needs.
-VkDescriptorType descriptorTypeOf(const nlohmann::json& type, const std::string& where)
-{
-    const std::string shape = type.value("baseShape", "");
-    if (shape == "structuredBuffer" || shape == "byteAddressBuffer") {
-        return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    }
-    if (shape == "accelerationStructure") {
-        return VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-    }
-    if (shape.rfind("texture", 0) == 0 && type.value("access", "") == "readWrite") {
-        return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    }
-    throw std::runtime_error(where + ": resource kind '" + shape + "' is not supported by ComputeKernel");
-}
-
-// Compares the shader's own report of its interface with what the C++ side declares.
-void checkAgainstReflection(const KernelDescription& description, const std::string& name)
-{
-    std::filesystem::path reportPath = description.spirvPath;
-    reportPath.replace_extension(".json");
-    std::ifstream file(reportPath);
-    if (!file) {
-        throw std::runtime_error("Missing shader reflection report '" + reportPath.string() +
-                                 "'. Rebuild the shaders (target *_shaders).");
-    }
-    const nlohmann::json report = nlohmann::json::parse(file);
-
-    std::uint32_t shaderPushSize = 0;
-    for (const nlohmann::json& parameter : report.at("parameters")) {
-        const std::string parameterName = parameter.value("name", "?");
-        const std::string where = "Shader '" + name + "', parameter '" + parameterName + "'";
-        const nlohmann::json& binding = parameter.at("binding");
-        const std::string kind = binding.at("kind");
-
-        if (kind == "pushConstantBuffer") {
-            shaderPushSize = parameter.at("type").at("elementVarLayout").at("binding").at("size");
-            continue;
-        }
-        if (kind != "descriptorTableSlot") {
-            throw std::runtime_error(where + ": binding kind '" + kind + "' is not supported by ComputeKernel");
-        }
-        if (binding.value("space", 0) != 0) {
-            throw std::runtime_error(where + ": only descriptor set 0 is supported");
-        }
-
-        const std::uint32_t index = binding.at("index");
-        const VkDescriptorType expected = descriptorTypeOf(parameter.at("type"), where);
-        const auto provided = std::find_if(description.bindings.begin(), description.bindings.end(),
-                                           [&](const KernelBinding& b) { return b.binding == index; });
-        if (provided == description.bindings.end()) {
-            throw std::runtime_error(where + " reads binding " + std::to_string(index) +
-                                     ", but the C++ side does not provide that binding");
-        }
-        if (provided->type != expected) {
-            throw std::runtime_error(where + " at binding " + std::to_string(index) + " is a " +
-                                     descriptorTypeName(expected) + ", but the C++ side provides a " +
-                                     descriptorTypeName(provided->type));
-        }
-    }
-
-    if (shaderPushSize != description.pushConstantSize) {
-        throw std::runtime_error("Shader '" + name + "' expects " + std::to_string(shaderPushSize) +
-                                 " bytes of push constants, but the C++ struct has " +
-                                 std::to_string(description.pushConstantSize));
-    }
-}
-
-} // namespace
 
 KernelResources& KernelResources::buffer(std::uint32_t binding, const Buffer& buffer)
 {
@@ -138,28 +34,54 @@ KernelResources& KernelResources::accelerationStructure(std::uint32_t binding, V
     return *this;
 }
 
+void KernelResources::push(const Context& context, VkCommandBuffer cmd, VkPipelineBindPoint bindPoint,
+                           VkPipelineLayout layout) const
+{
+    const std::size_t count = entries_.size();
+    std::vector<VkWriteDescriptorSet> writes(count);
+    std::vector<VkDescriptorBufferInfo> bufferInfos(count);
+    std::vector<VkDescriptorImageInfo> imageInfos(count);
+    std::vector<VkWriteDescriptorSetAccelerationStructureKHR> structureInfos(count);
+
+    for (std::size_t i = 0; i < count; ++i) {
+        const Entry& entry = entries_[i];
+        VkWriteDescriptorSet& write = writes[i];
+        write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        write.dstBinding = entry.binding;
+        write.descriptorCount = 1;
+        write.descriptorType = entry.type;
+        switch (entry.type) {
+        case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+            bufferInfos[i] = {entry.buffer, 0, VK_WHOLE_SIZE};
+            write.pBufferInfo = &bufferInfos[i];
+            break;
+        case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+            imageInfos[i] = {VK_NULL_HANDLE, entry.view, VK_IMAGE_LAYOUT_GENERAL};
+            write.pImageInfo = &imageInfos[i];
+            break;
+        case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+            structureInfos[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
+            structureInfos[i].accelerationStructureCount = 1;
+            structureInfos[i].pAccelerationStructures = &entry.structure;
+            write.pNext = &structureInfos[i];
+            break;
+        default:
+            throw std::logic_error("KernelResources: unsupported descriptor type");
+        }
+    }
+    context.dispatch().cmdPushDescriptorSetKHR(cmd, bindPoint, layout, 0, static_cast<std::uint32_t>(writes.size()),
+                                               writes.data());
+}
+
 ComputeKernel::ComputeKernel(const Context& context, const KernelDescription& description)
     : context_(context),
       name_(description.spirvPath.filename().string()),
       pushConstantSize_(description.pushConstantSize)
 {
-    checkAgainstReflection(description, name_);
+    checkAgainstReflection(description.spirvPath, description.bindings, description.pushConstantSize, name_);
     const VkDevice device = context.device();
 
-    std::vector<VkDescriptorSetLayoutBinding> bindings;
-    for (const KernelBinding& binding : description.bindings) {
-        VkDescriptorSetLayoutBinding layoutBinding{};
-        layoutBinding.binding = binding.binding;
-        layoutBinding.descriptorType = binding.type;
-        layoutBinding.descriptorCount = 1;
-        layoutBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        bindings.push_back(layoutBinding);
-    }
-    VkDescriptorSetLayoutCreateInfo setLayoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    setLayoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-    setLayoutInfo.bindingCount = static_cast<std::uint32_t>(bindings.size());
-    setLayoutInfo.pBindings = bindings.data();
-    THESIS_VK_CHECK(vkCreateDescriptorSetLayout(device, &setLayoutInfo, nullptr, &setLayout_));
+    setLayout_ = createPushDescriptorSetLayout(device, description.bindings, VK_SHADER_STAGE_COMPUTE_BIT);
 
     VkPushConstantRange pushRange{VK_SHADER_STAGE_COMPUTE_BIT, 0, pushConstantSize_};
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
@@ -188,42 +110,7 @@ ComputeKernel::ComputeKernel(const Context& context, const KernelDescription& de
     const VkResult result = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline_);
     vkDestroyShaderModule(device, module, nullptr);
     THESIS_VK_CHECK(result);
-    readStatistics();
-}
-
-void ComputeKernel::readStatistics()
-{
-    if (!context_.pipelineStatistics()) {
-        return;
-    }
-    // A compute pipeline has one executable: the compiled shader.
-    VkPipelineExecutableInfoKHR executable{VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_INFO_KHR};
-    executable.pipeline = pipeline_;
-    executable.executableIndex = 0;
-    std::uint32_t count = 0;
-    THESIS_VK_CHECK(context_.dispatch().getPipelineExecutableStatisticsKHR(&executable, &count, nullptr));
-    std::vector<VkPipelineExecutableStatisticKHR> raw(count, {VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_STATISTIC_KHR});
-    THESIS_VK_CHECK(context_.dispatch().getPipelineExecutableStatisticsKHR(&executable, &count, raw.data()));
-    for (const VkPipelineExecutableStatisticKHR& statistic : raw) {
-        double value = 0.0;
-        switch (statistic.format) {
-        case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_BOOL32_KHR:
-            value = statistic.value.b32 ? 1.0 : 0.0;
-            break;
-        case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_INT64_KHR:
-            value = static_cast<double>(statistic.value.i64);
-            break;
-        case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR:
-            value = static_cast<double>(statistic.value.u64);
-            break;
-        case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_FLOAT64_KHR:
-            value = statistic.value.f64;
-            break;
-        default:
-            continue;
-        }
-        statistics_.push_back({statistic.name, statistic.description, value});
-    }
+    statistics_ = readPipelineStatistics(context_, pipeline_);
 }
 
 ComputeKernel::~ComputeKernel()
@@ -241,43 +128,8 @@ void ComputeKernel::dispatch(VkCommandBuffer cmd, const KernelResources& resourc
     if (pushConstantSize != pushConstantSize_) {
         throw std::logic_error("ComputeKernel '" + name_ + "': push constant size mismatch");
     }
-
-    const std::size_t count = resources.entries_.size();
-    std::vector<VkWriteDescriptorSet> writes(count);
-    std::vector<VkDescriptorBufferInfo> bufferInfos(count);
-    std::vector<VkDescriptorImageInfo> imageInfos(count);
-    std::vector<VkWriteDescriptorSetAccelerationStructureKHR> structureInfos(count);
-
-    for (std::size_t i = 0; i < count; ++i) {
-        const KernelResources::Entry& entry = resources.entries_[i];
-        VkWriteDescriptorSet& write = writes[i];
-        write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        write.dstBinding = entry.binding;
-        write.descriptorCount = 1;
-        write.descriptorType = entry.type;
-        switch (entry.type) {
-        case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
-            bufferInfos[i] = {entry.buffer, 0, VK_WHOLE_SIZE};
-            write.pBufferInfo = &bufferInfos[i];
-            break;
-        case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
-            imageInfos[i] = {VK_NULL_HANDLE, entry.view, VK_IMAGE_LAYOUT_GENERAL};
-            write.pImageInfo = &imageInfos[i];
-            break;
-        case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
-            structureInfos[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
-            structureInfos[i].accelerationStructureCount = 1;
-            structureInfos[i].pAccelerationStructures = &entry.structure;
-            write.pNext = &structureInfos[i];
-            break;
-        default:
-            throw std::logic_error("ComputeKernel: unsupported descriptor type");
-        }
-    }
-
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
-    context_.dispatch().cmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout_, 0,
-                                                static_cast<std::uint32_t>(writes.size()), writes.data());
+    resources.push(context_, cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout_);
     if (pushConstantSize_ > 0) {
         vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, pushConstantSize_, pushConstants);
     }

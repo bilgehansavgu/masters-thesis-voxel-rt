@@ -8,6 +8,9 @@ thesis_add_library(gpu
         Context.cpp
         GpuTimer.cpp
         Image.cpp
+        RayTracingPipeline.cpp
+        ShaderInterface.cpp
+        ShaderInterface.h
         Swapchain.cpp
         VmaImplementation.cpp
     PUBLIC_DEPS

@@ -33,6 +33,13 @@
 #define THESIS_BINDING_BRICK_ATTRIBUTES 13  /* split layout only: one 16-bit normal per voxel */
 #define THESIS_BINDING_BRICK_MIPMAP 14      /* encodings with mipmap only: 16-bit min/max mipmap cells */
 
+/* Primitive kind bitmask, the baseline format (the layout is in Bitmask.h). */
+#define THESIS_BINDING_BITMASK_HEADER 9      /* one BitmaskModelHeader */
+#define THESIS_BINDING_BITMASK_TABLE 10      /* one BitmaskBrickRecord per brick */
+#define THESIS_BINDING_BITMASK_MASKS 11      /* one occupancy bit per voxel */
+#define THESIS_BINDING_BITMASK_ROW_COUNTS 12 /* 16-bit words: filled voxels before each row of cells */
+#define THESIS_BINDING_BITMASK_NORMALS 13    /* 16-bit words: one normal per filled voxel */
+
 /* Shading kernel (descriptor set 0). */
 #define THESIS_BINDING_SHADE_HITS 0
 #define THESIS_BINDING_SHADE_OUTPUT 1

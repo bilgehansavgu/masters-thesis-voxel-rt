@@ -16,7 +16,7 @@ WHEN A MODEL IS LOADED, and again when the encoding is switched
                  ├─ brick2012_split        2012 format, attributes in their own buffer
                  ├─ brick2012_inline_mip   the same with the min/max mipmap of each brick
                  ├─ brick2012_split_mip    the same with the min/max mipmap of each brick
-                 └─ (later)                a baseline format
+                 └─ bitmask                baseline: one occupancy bit per voxel, list of normals
 
 EVERY FRAME
   camera rays → [ TRACER SOCKET ] → hits → shading → screen

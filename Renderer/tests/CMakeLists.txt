@@ -33,6 +33,7 @@ target_link_libraries(thesis_tests PRIVATE
     thesis::encoding
     thesis::encoding_plugins
     thesis::encoding_brick2012
+    thesis::encoding_bitmask
     nlohmann_json::nlohmann_json
     Catch2::Catch2WithMain)
 target_compile_definitions(thesis_tests PRIVATE THESIS_DEFAULT_SHADER_DIR="${THESIS_SHADER_OUTPUT_DIR}")

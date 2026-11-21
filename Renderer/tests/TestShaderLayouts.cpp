@@ -3,6 +3,7 @@
 // compiler's own layout report for every compiled shader and checks each shared struct against the C++ declaration,
 // field by field. Needs no GPU.
 
+#include "thesis/bitmask/BitmaskBuffers.h"
 #include "thesis/brick2012/BrickBuffers.h"
 #include "thesis/core/GpuTypes.h"
 #include "thesis/tracers/software_bvh/Bvh.h"
@@ -31,6 +32,8 @@ struct Field {
 // declared with two vec3 in C++ and six scalars in Slang (see types.slang), hence the mapping.
 std::map<std::string, std::vector<Field>> cppLayouts()
 {
+    using bitmask::BitmaskBrickRecord;
+    using bitmask::BitmaskModelHeader;
     using brick2012::BrickModelHeader;
     using brick2012::BrickRecord;
     using core::Aabb;
@@ -87,6 +90,18 @@ std::map<std::string, std::vector<Field>> cppLayouts()
           {"cellBase", offsetof(BrickRecord, cellBase), 4},
           {"indirectionBase", offsetof(BrickRecord, indirectionBase), 4},
           {"attributeBase", offsetof(BrickRecord, attributeBase), 4}}},
+        {"BitmaskModelHeader",
+         {{"origin", offsetof(BitmaskModelHeader, origin), 12},
+          {"voxelSize", offsetof(BitmaskModelHeader, voxelSize), 4},
+          {"gridSize", offsetof(BitmaskModelHeader, gridSize), 12},
+          {"brickSize", offsetof(BitmaskModelHeader, brickSize), 4},
+          {"brickCount", offsetof(BitmaskModelHeader, brickCount), 4},
+          {"voxelCount", offsetof(BitmaskModelHeader, voxelCount), 4},
+          {"reserved0", offsetof(BitmaskModelHeader, reserved0), 4},
+          {"reserved1", offsetof(BitmaskModelHeader, reserved1), 4}}},
+        {"BitmaskBrickRecord",
+         {{"position", offsetof(BitmaskBrickRecord, position), 4},
+          {"normalBase", offsetof(BitmaskBrickRecord, normalBase), 4}}},
         {"Aabb",
          {{"minX", offsetof(Aabb, lo) + 0, 4},
           {"minY", offsetof(Aabb, lo) + 4, 4},

@@ -281,8 +281,12 @@ TEST_CASE("tracers return hand-computed hits inside a brick", "[gpu][brick][know
 
         for (const std::string& encodingName : encodings.names()) {
             const encoding::EncodedModel encoded = encodings.create(encodingName)->encode(model);
+            // An encoding that picks the axis of its columns from the normals must pick `axis`
+            // here. An encoding with a fixed column axis tests the same voxels three times.
             const char* axisNames[] = {"x", "y", "z"};
-            REQUIRE(encoded.statistics.at("bricks_by_primary_axis").at(axisNames[axis]).get<std::uint64_t>() == 1);
+            if (encoded.statistics.contains("bricks_by_primary_axis")) {
+                REQUIRE(encoded.statistics.at("bricks_by_primary_axis").at(axisNames[axis]).get<std::uint64_t>() == 1);
+            }
             const tracing::GpuScene gpuScene = tracing::GpuScene::upload(context, encoded.scene);
             const tests::HitFindingTracers set = tests::makeHitFindingTracers(context, gpuScene);
             REQUIRE_FALSE(set.tracers.empty());

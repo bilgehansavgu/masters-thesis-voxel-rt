@@ -3,6 +3,7 @@
 
 #include "VoxelTestHelpers.h"
 
+#include "thesis/bitmask/BitmaskBuffers.h"
 #include "thesis/brick2012/BrickBuffers.h"
 #include "thesis/brick2012/ColumnBrick.h"
 #include "thesis/encodings/BuiltInEncodings.h"
@@ -16,6 +17,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -256,15 +258,16 @@ TEST_CASE("the min/max mipmap holds the lowest and the highest voxel of each squ
             INFO(name << " on " << input.name);
             const core::Scene scene = encoder->encode(input.model).scene;
             const std::vector<std::byte>* mipmap = bytesAt(scene, THESIS_BINDING_BRICK_MIPMAP);
+            const bool hasMipmap = encoder->skipsEmptySpace();
+            if (!hasMipmap) {
+                // Only the 2012 header has a mipmap field, and not every encoding is of the 2012
+                // format. A 2012 encoding without mipmap that writes levels fails its decode().
+                CHECK(mipmap == nullptr);
+                continue;
+            }
             brick2012::BrickModelHeader header;
             std::memcpy(&header, bytesAt(scene, THESIS_BINDING_BRICK_HEADER)->data(), sizeof(header));
             const std::uint32_t n = header.brickSize;
-            const bool hasMipmap = encoder->skipsEmptySpace();
-            if (!hasMipmap) {
-                CHECK(mipmap == nullptr);
-                CHECK(header.mipmapLevels == 0);
-                continue;
-            }
             REQUIRE(mipmap != nullptr);
             REQUIRE((1u << (header.mipmapLevels + 1)) == n); // the last level has 2 x 2 cells
             const std::size_t cellsOfBrick = THESIS_MIP_CELLS_OF_BRICK(n);
@@ -352,4 +355,158 @@ TEST_CASE("primary axis follows the normals", "[encoding]")
     const brick2012::AxisChoiceStatistics choice = brick2012::axisChoiceStatistics(layer);
     CHECK(choice.pointerCellsPaperRule == 0);
     CHECK(choice.bricksWhereBestDiffers == 0);
+}
+
+// The round trip proves that an encoding loses nothing. It does not prove that it stores
+// nothing extra. These tests do: every buffer must have exactly the size its layout says.
+//
+namespace {
+
+// The sizes in bytes of the buffers of one encoded scene, by buffer name.
+using BufferSizes = std::map<std::string, std::uint64_t>;
+
+BufferSizes sizesOf(const core::Scene& scene)
+{
+    BufferSizes sizes;
+    for (const encoding::MemoryReport::Buffer& buffer : encoding::memoryReport(scene).buffers) {
+        sizes[buffer.name] = buffer.bytes;
+    }
+    return sizes;
+}
+
+// Bytes of a buffer of `words` 16-bit words: padded to whole 32-bit words, never empty.
+std::uint64_t bytesOf16(std::uint64_t words)
+{
+    return std::max<std::uint64_t>((2 * words + 3) / 4 * 4, 4);
+}
+
+} // namespace
+
+// One brick of 8 x 8 x 8 voxels, sizes counted by hand. Four voxels, normals along z, so the 2012
+// encodings put their columns along z:
+//   A = (2, 3, 4)                         column (2, 3): one voxel, a height cell
+//   B = (5, 5, 1), (5, 5, 2), (5, 5, 5)   column (5, 5): runs [1, 2] and [5], a pointer cell
+TEST_CASE("every buffer of a hand-counted brick has the size of its layout", "[encoding][memory]")
+{
+    const voxel::VoxelModel model =
+        tests::makeModel(8, {1, 1, 1}, [](const glm::uvec3& p) -> std::optional<std::uint16_t> {
+            const bool filled = p == glm::uvec3(2, 3, 4) || p == glm::uvec3(5, 5, 1) || p == glm::uvec3(5, 5, 2) ||
+                                p == glm::uvec3(5, 5, 5);
+            return filled ? std::optional<std::uint16_t>(std::uint16_t{0x7F7F}) : std::nullopt; // packed (0, 0, 1)
+        });
+    REQUIRE(model.voxelCount() == 4);
+
+    const std::uint64_t bounds = sizeof(core::Aabb); // one box: 32 bytes
+    // The 2012 format: header 48 bytes, one 16-byte brick record, 64 cells.
+    //   inline  cells of 32 bits. Indirection: the two run words of column B, then its three
+    //           normals: 5 words = 10 bytes, padded to 12. The normal of A is in its cell.
+    //   split   cells of 16 bits. Indirection: 8 row words, then for column B the index of its
+    //           first normal and two run words: 11 words = 22 bytes, padded to 24. Attributes:
+    //           four normals, 8 bytes.
+    //   mipmap  (64 - 4) / 3 = 20 cells of 16 bits: 40 bytes.
+    // The bitmask: header 48 bytes, one 8-byte brick record, 512 bits = 64 bytes of masks, 8 row
+    // counts of 16 bits, four normals of 16 bits.
+    const std::map<std::string, BufferSizes> expected{
+        {"brick2012_inline",
+         {{"bounds", bounds}, {"header", 48}, {"brick table", 16}, {"cells", 256}, {"indirection", 12}}},
+        {"brick2012_split",
+         {{"bounds", bounds},
+          {"header", 48},
+          {"brick table", 16},
+          {"cells", 128},
+          {"indirection", 24},
+          {"attributes", 8}}},
+        {"brick2012_inline_mip",
+         {{"bounds", bounds},
+          {"header", 48},
+          {"brick table", 16},
+          {"cells", 256},
+          {"indirection", 12},
+          {"mipmap", 40}}},
+        {"brick2012_split_mip",
+         {{"bounds", bounds},
+          {"header", 48},
+          {"brick table", 16},
+          {"cells", 128},
+          {"indirection", 24},
+          {"attributes", 8},
+          {"mipmap", 40}}},
+        {"bitmask",
+         {{"bounds", bounds}, {"header", 48}, {"brick table", 8}, {"masks", 64}, {"row counts", 16}, {"normals", 8}}},
+    };
+
+    const encoding::EncodingRegistry registry = makeRegistry();
+    for (const auto& [name, sizes] : expected) {
+        INFO(name);
+        REQUIRE(registry.contains(name));
+        const encoding::EncodedModel encoded = registry.create(name)->encode(model);
+        CHECK(sizesOf(encoded.scene) == sizes);
+        std::uint64_t total = 0;
+        for (const auto& [buffer, bytes] : sizes) {
+            total += bytes;
+        }
+        CHECK(encoding::memoryReport(encoded.scene).totalBytes == total);
+    }
+}
+
+// The same sizes as formulas of what a model holds, on models with many bricks. B bricks of N^3
+// voxels, V filled voxels. The counts of cells and runs come from the statistics of the 2012
+// encoder; the test of those counts is "columns along each axis give back the brick".
+TEST_CASE("every buffer of a larger model has the size of its layout", "[encoding][memory]")
+{
+    const encoding::EncodingRegistry registry = makeRegistry();
+    for (const NamedModel& input : testModels()) {
+        const std::uint64_t b = input.model.bricks.size();
+        const std::uint64_t n = input.model.grid.brickSize;
+        const std::uint64_t v = input.model.voxelCount();
+
+        const nlohmann::json columns = registry.create("brick2012_split")->encode(input.model).statistics;
+        const auto count = [&](const char* group, const char* key) {
+            return columns.at(group).at(key).get<std::uint64_t>();
+        };
+        const std::uint64_t pointerCells = count("cells", "pointer");
+        const std::uint64_t pointerVoxels = columns.at("voxels_in_pointer_cells").get<std::uint64_t>();
+        std::uint64_t runs = 0;
+        for (const auto& [length, runsOfLength] : columns.at("pointer_runs_by_length").items()) {
+            runs += runsOfLength.get<std::uint64_t>();
+        }
+
+        const std::uint64_t bounds = b * sizeof(core::Aabb);
+        // inline: runs, then the normals of the pointer columns. split: one row word per row of
+        // each brick, then per pointer column the index of its first normal and its runs.
+        const BufferSizes inlineLayout{{"bounds", bounds},
+                                       {"header", 48},
+                                       {"brick table", 16 * b},
+                                       {"cells", 4 * b * n * n},
+                                       {"indirection", bytesOf16(runs + pointerVoxels)}};
+        const BufferSizes splitLayout{{"bounds", bounds},
+                                      {"header", 48},
+                                      {"brick table", 16 * b},
+                                      {"cells", 2 * b * n * n},
+                                      {"indirection", bytesOf16(b * n + pointerCells + runs)},
+                                      {"attributes", bytesOf16(v)}};
+        const std::uint64_t mipmap = bytesOf16(b * THESIS_MIP_CELLS_OF_BRICK(n));
+        BufferSizes inlineMip = inlineLayout;
+        inlineMip["mipmap"] = mipmap;
+        BufferSizes splitMip = splitLayout;
+        splitMip["mipmap"] = mipmap;
+        const std::map<std::string, BufferSizes> expected{
+            {"brick2012_inline", inlineLayout},
+            {"brick2012_split", splitLayout},
+            {"brick2012_inline_mip", inlineMip},
+            {"brick2012_split_mip", splitMip},
+            {"bitmask",
+             {{"bounds", bounds},
+              {"header", 48},
+              {"brick table", 8 * b},
+              {"masks", b * n * n * n / 8},
+              {"row counts", bytesOf16(b * n)},
+              {"normals", bytesOf16(v)}}},
+        };
+
+        for (const auto& [name, sizes] : expected) {
+            INFO(name << " on " << input.name);
+            CHECK(sizesOf(registry.create(name)->encode(input.model).scene) == sizes);
+        }
+    }
 }

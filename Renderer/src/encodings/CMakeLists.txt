@@ -2,6 +2,7 @@
 # thesis_register_plugin(SOCKET ENCODING ...) in its CMakeLists.txt, and add a primitive kind
 # with the same name in shaders/primitives/ and in THESIS_PRIMITIVE_KINDS.
 add_subdirectory(brick2012)
+add_subdirectory(bitmask)
 
 # thesis::encoding_plugins exposes registerBuiltInEncodings(), generated from the registrations above.
 thesis_add_library(encoding_plugins

@@ -54,10 +54,24 @@ Context::Context(const ContextOptions& options)
     for (const std::string& extension : options.instanceExtensions) {
         instanceBuilder.enable_extension(extension.c_str());
     }
+    // Debug labels name the passes of a frame in Nsight Graphics and RenderDoc. They cost nothing
+    // measurable, so they are on in every run where the loader offers them, not only with validation.
+    const auto systemInfo = vkb::SystemInfo::get_system_info();
+    const bool debugUtils = systemInfo && systemInfo->is_extension_available(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    if (debugUtils && !options.validation) {
+        instanceBuilder.enable_extension(
+            VK_EXT_DEBUG_UTILS_EXTENSION_NAME); // with validation, the messenger enables it
+    }
     if (!options.createSurface) {
         instanceBuilder.set_headless(true);
     }
     instance_ = unwrap(instanceBuilder.build(), "Creating the Vulkan instance");
+    if (debugUtils) {
+        beginLabel_ = reinterpret_cast<PFN_vkCmdBeginDebugUtilsLabelEXT>(
+            vkGetInstanceProcAddr(instance_.instance, "vkCmdBeginDebugUtilsLabelEXT"));
+        endLabel_ = reinterpret_cast<PFN_vkCmdEndDebugUtilsLabelEXT>(
+            vkGetInstanceProcAddr(instance_.instance, "vkCmdEndDebugUtilsLabelEXT"));
+    }
 
     if (options.createSurface) {
         surface_ = options.createSurface(instance_.instance);
@@ -193,6 +207,22 @@ void Context::queryDeviceInfo()
         if (memory.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
             info_.deviceLocalBytes += memory.memoryHeaps[i].size;
         }
+    }
+}
+
+void Context::beginLabel(VkCommandBuffer cmd, const char* name) const
+{
+    if (beginLabel_ != nullptr) {
+        VkDebugUtilsLabelEXT label{VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT};
+        label.pLabelName = name;
+        beginLabel_(cmd, &label);
+    }
+}
+
+void Context::endLabel(VkCommandBuffer cmd) const
+{
+    if (endLabel_ != nullptr) {
+        endLabel_(cmd);
     }
 }
 

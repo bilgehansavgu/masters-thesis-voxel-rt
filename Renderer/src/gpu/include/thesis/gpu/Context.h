@@ -78,6 +78,11 @@ public:
     // Bytes of device-local memory currently in use by this process (VK_EXT_memory_budget).
     [[nodiscard]] VkDeviceSize deviceLocalUsage() const;
 
+    // Debug labels (VK_EXT_debug_utils): a named range of commands, shown by Nsight Graphics and
+    // RenderDoc. Both do nothing where the loader does not offer the extension. Use DebugLabel.
+    void beginLabel(VkCommandBuffer cmd, const char* name) const;
+    void endLabel(VkCommandBuffer cmd) const;
+
 private:
     void queryDeviceInfo();
 
@@ -92,11 +97,30 @@ private:
     DeviceInfo info_{};
     bool memoryBudget_ = false;
     bool pipelineStatistics_ = false;
+    PFN_vkCmdBeginDebugUtilsLabelEXT beginLabel_ = nullptr;
+    PFN_vkCmdEndDebugUtilsLabelEXT endLabel_ = nullptr;
 
     VkCommandPool commandPool_ = VK_NULL_HANDLE;
     VkCommandBuffer commandBuffer_ = VK_NULL_HANDLE;
     VkFence fence_ = VK_NULL_HANDLE;
     TracyVkCtx tracy_ = nullptr;
+};
+
+// A debug label around the commands recorded while it lives: one named pass in Nsight Graphics
+// and RenderDoc.
+class DebugLabel {
+public:
+    DebugLabel(const Context& context, VkCommandBuffer cmd, const char* name) : context_(context), cmd_(cmd)
+    {
+        context_.beginLabel(cmd_, name);
+    }
+    ~DebugLabel() { context_.endLabel(cmd_); }
+    DebugLabel(const DebugLabel&) = delete;
+    DebugLabel& operator=(const DebugLabel&) = delete;
+
+private:
+    const Context& context_;
+    VkCommandBuffer cmd_;
 };
 
 } // namespace thesis::gpu

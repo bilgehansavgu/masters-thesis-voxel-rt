@@ -5,6 +5,7 @@
 #include "thesis/gpu/Context.h"
 
 #include <stdexcept>
+#include <string>
 
 namespace thesis::app {
 
@@ -61,11 +62,16 @@ void FramePipeline::trace(VkCommandBuffer cmd, tracing::ITracer& tracer, const c
         log_->request(cmd, loggedRay_.value_or(tracing::kNoLoggedRay));
     }
     if (!frozenRays_) {
+        const gpu::DebugLabel label(context_, cmd, kStageRayGeneration);
         THESIS_GPU_SCOPE(timer_, context_.tracy(), cmd, kStageRayGeneration);
         cameraRays_.generate(cmd, camera, batch_);
     }
     gpu::computeToComputeBarrier(cmd);
     {
+        // Named after the tracer, so a capture shows which search ran: "trace: Sparse octree".
+        const std::string name =
+            std::string(kStageTrace) + ": " + tracer.text().label + (workCounted_ ? " (counting)" : "");
+        const gpu::DebugLabel label(context_, cmd, name.c_str());
         THESIS_GPU_SCOPE(timer_, context_.tracy(), cmd, kStageTrace);
         if (workCounted_) {
             tracer.traceCounting(cmd, batch_, tracing::WorkOutput{work_, log_->buffer()});
@@ -91,6 +97,7 @@ void FramePipeline::shade(VkCommandBuffer cmd, const resolve::ShadingParams& par
 {
     output_.transition(cmd, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+    const gpu::DebugLabel label(context_, cmd, kStageShading);
     THESIS_GPU_SCOPE(timer_, context_.tracy(), cmd, kStageShading);
     shading_.shade(cmd, batch_, output_.view(), params, work());
 }

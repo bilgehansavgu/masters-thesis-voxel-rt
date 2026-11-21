@@ -14,17 +14,6 @@
 
 namespace thesis::app {
 
-std::array<VkOffset3D, 2> letterbox(VkExtent2D image, VkExtent2D window)
-{
-    const float scale = std::min(static_cast<float>(window.width) / static_cast<float>(image.width),
-                                 static_cast<float>(window.height) / static_cast<float>(image.height));
-    const auto width = static_cast<std::int32_t>(static_cast<float>(image.width) * scale);
-    const auto height = static_cast<std::int32_t>(static_cast<float>(image.height) * scale);
-    const auto x = (static_cast<std::int32_t>(window.width) - width) / 2;
-    const auto y = (static_cast<std::int32_t>(window.height) - height) / 2;
-    return {VkOffset3D{x, y, 0}, VkOffset3D{x + width, y + height, 1}};
-}
-
 Presenter::Presenter(const gpu::Context& context, Window& window)
     : context_(context), window_(window), swapchain_(context, window.framebufferExtent())
 {
@@ -84,7 +73,7 @@ std::optional<VkCommandBuffer> Presenter::beginFrame()
     return commandBuffer_;
 }
 
-bool Presenter::present(gpu::StorageImage& image, const Overlay& overlay)
+bool Presenter::present(gpu::StorageImage& image, PixelRect area, const Overlay& overlay)
 {
     const VkCommandBuffer cmd = commandBuffer_;
     const VkImage target = swapchain_.image(imageIndex_);
@@ -107,9 +96,19 @@ bool Presenter::present(gpu::StorageImage& image, const Overlay& overlay)
     blit.srcOffsets[1] = {static_cast<std::int32_t>(image.extent().width),
                           static_cast<std::int32_t>(image.extent().height), 1};
     blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    const auto destination = letterbox(image.extent(), swapchain_.extent());
-    blit.dstOffsets[0] = destination[0];
-    blit.dstOffsets[1] = destination[1];
+    // The area, kept inside the window: the panel computes it from the previous layout, which can
+    // be larger than the window right after a resize.
+    const VkExtent2D window = swapchain_.extent();
+    PixelRect inside{std::clamp(area.x0, 0, static_cast<std::int32_t>(window.width)),
+                     std::clamp(area.y0, 0, static_cast<std::int32_t>(window.height)),
+                     std::clamp(area.x1, 0, static_cast<std::int32_t>(window.width)),
+                     std::clamp(area.y1, 0, static_cast<std::int32_t>(window.height))};
+    if (inside.empty()) {
+        inside = {0, 0, static_cast<std::int32_t>(window.width), static_cast<std::int32_t>(window.height)};
+    }
+    const PixelRect destination = letterbox(image.extent().width, image.extent().height, inside);
+    blit.dstOffsets[0] = {destination.x0, destination.y0, 0};
+    blit.dstOffsets[1] = {destination.x1, destination.y1, 1};
     VkBlitImageInfo2 blitInfo{VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2};
     blitInfo.srcImage = image.image();
     blitInfo.srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;

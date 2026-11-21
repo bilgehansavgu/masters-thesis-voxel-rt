@@ -522,6 +522,10 @@ private:
 
     bool skipsEmptySpace() const override { return mipmap_; }
     std::string skippingTwin() const override { return std::string(Brick2012Encoding(layout_, !mipmap_).name()); }
+    std::vector<encoding::EncodingSetting> settings() const override
+    {
+        return {{"Layout", layout_ == Layout::Inline ? "inline" : "split"}, {"Mipmap", mipmap_ ? "on" : "off"}};
+    }
 
     Layout layout_;
     bool mipmap_;

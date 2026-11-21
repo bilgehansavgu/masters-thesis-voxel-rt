@@ -2,6 +2,8 @@
 
 // Side: GPU
 
+#include "Letterbox.h"
+
 #include "thesis/gpu/Swapchain.h"
 
 #include <vulkan/vulkan.h>
@@ -20,10 +22,6 @@ class StorageImage;
 namespace thesis::app {
 
 class Window;
-
-// Largest rectangle with the image's aspect ratio that fits in the window, centred: where the
-// picture of the frame is in the window. Corners [0] (inclusive) and [1] (exclusive), in pixels.
-[[nodiscard]] std::array<VkOffset3D, 2> letterbox(VkExtent2D image, VkExtent2D window);
 
 // Gets frames onto the window: the swapchain, the per-frame command buffer and the
 // synchronisation objects, with one frame in flight. Per frame:
@@ -47,9 +45,10 @@ public:
     // rebuilt first (resize); the caller then skips this frame.
     [[nodiscard]] std::optional<VkCommandBuffer> beginFrame();
 
-    // Copies `image` into the window (keeping its aspect ratio), lets `overlay` draw on top,
-    // then submits and presents. Returns true if the window was rebuilt afterwards.
-    bool present(gpu::StorageImage& image, const Overlay& overlay);
+    // Copies `image` into `area` of the window (keeping its aspect ratio; an empty area is the whole
+    // window), lets `overlay` draw on top, then submits and presents. Returns true if the window was
+    // rebuilt afterwards.
+    bool present(gpu::StorageImage& image, PixelRect area, const Overlay& overlay);
 
     [[nodiscard]] VkFormat format() const { return swapchain_.format(); }
     [[nodiscard]] std::uint32_t imageCount() const { return swapchain_.imageCount(); }

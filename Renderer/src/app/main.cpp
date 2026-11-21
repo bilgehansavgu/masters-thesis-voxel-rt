@@ -1,79 +1,25 @@
 #include "Benchmark.h"
+#include "CommandLine.h"
 #include "Interactive.h"
 #include "Options.h"
 #include "SceneSetup.h"
 #include "Screenshot.h"
 
-#include <CLI/CLI.hpp>
-
-#include <cstdint>
 #include <cstdio>
 #include <exception>
-#include <map>
+#include <filesystem>
 #include <string>
+#include <vector>
 
 int main(int argc, char** argv)
 {
-    thesis::app::Options options;
-    options.shaderDirectory = THESIS_DEFAULT_SHADER_DIR;
-
-    CLI::App cli{"Thesis renderer: hardware vs software ray tracing behind one tracer socket"};
-    cli.add_flag("--benchmark", options.benchmark, "Run the headless benchmark and write results files");
-    cli.add_flag("--fixed-view", options.fixedView, "Benchmark a stationary camera");
-    cli.add_flag("--compare-skipping", options.compareSkipping, "Compare skipping off and on at one camera pose");
-    cli.add_option("--open-result", options.openResult, "Reopen the scene and pose of a fixed-view benchmark")
-        ->check(CLI::ExistingFile);
-    cli.add_option("--screenshot", options.screenshot, "Write one frame to this PNG file, without a window");
-    cli.add_option("--view", options.view, "Screenshot: the view, numbered as in the panel of the window: 1 to 12")
-        ->check(CLI::Range(1, 12));
-    cli.add_option("--scale-max", options.scaleMaximum,
-                   "Screenshot of a count view: the count at the end of the colour map; a larger count is white")
-        ->check(CLI::Range(1.0f, 4096.0f));
-    cli.add_flag("--log-scale", options.logScale, "Screenshot of a count view: log2 colour scale instead of linear");
-    cli.add_option("--inspect", options.inspect,
-                   "The ray inspector on pixel x y of the frame. Window: starts on that ray. Screenshot: also "
-                   "prints every step of that ray")
-        ->expected(2);
-    cli.add_option("--camera", options.camera,
-                   "Camera at the start: yaw and pitch in degrees, then the distance as a factor of the "
-                   "distance that shows the whole scene. Benchmark: the start and the radius of the orbit")
-        ->expected(3);
-    cli.add_flag("--list-tracers", options.listTracers, "List the tracers built into this program");
-    cli.add_flag("--list-encodings", options.listEncodings, "List the encodings built into this program");
-    cli.add_option("--tracer", options.tracers,
-                   "Tracer(s) to use; benchmark default: all; screenshot default: hardware");
-    cli.add_option("--model", options.model, "Voxel file (.voxels, written by thesis_model) to show")
-        ->check(CLI::ExistingFile);
-    cli.add_option("--encoding", options.encoding, "Encoding of the voxel model; window: the one shown first");
-    cli.add_option("--brick-size", options.brickSize,
-                   "Voxels along one side of a brick: 8, 16 or 32. Default: as in the voxel file")
-        ->check(CLI::IsMember({8, 16, 32}));
-    cli.add_option("--grid", options.gridSize, "Box field: boxes per side")->check(CLI::PositiveNumber);
-    cli.add_option("--seed", options.seed, "Box field: random seed");
-    cli.add_flag("--boxes", options.boxExample, "Open the box tracing example")->excludes("--model");
-    cli.add_option("--width", options.width, "Render width (rays per row)")->check(CLI::PositiveNumber);
-    cli.add_option("--height", options.height, "Render height")->check(CLI::PositiveNumber);
-    cli.add_option("--ray-order", options.rayOrder,
-                   "Where the ray of a pixel sits in the ray list: rows (row by row) or tiles (8 x 4 pixels per "
-                   "warp)")
-        ->transform(CLI::CheckedTransformer(
-            std::map<std::string, std::uint32_t>{{"rows", THESIS_RAY_ORDER_ROWS}, {"tiles", THESIS_RAY_ORDER_TILES}}));
-    cli.add_option("--warmup", options.warmupSeconds, "Benchmark: minimum warm-up seconds for each tracer")
-        ->check(CLI::NonNegativeNumber);
-    cli.add_option("--warmup-max", options.warmupMaxSeconds,
-                   "Benchmark: maximum warm-up seconds while waiting for the GPU clock and the trace time to settle")
-        ->check(CLI::NonNegativeNumber);
-    cli.add_option("--frames", options.frames, "Benchmark: frames per repeat")->check(CLI::PositiveNumber);
-    cli.add_option("--repeats", options.repeats, "Benchmark: repeats per tracer")->check(CLI::PositiveNumber);
-    cli.add_option("--cooldown", options.cooldownSeconds, "Benchmark: seconds of idle time between tracers");
-    cli.add_option("--output", options.outputDirectory, "Benchmark: directory for results files");
-    cli.add_flag("--validation", options.validation, "Enable the Vulkan validation layer");
-    cli.add_option("--exit-after-frames", options.exitAfterFrames, "Window: close after N frames (smoke test)");
-    cli.add_flag("--self-test", options.selfTest,
-                 "Window: use every control of the panel once, then close (smoke test of the window)");
-    cli.add_option("--shader-dir", options.shaderDirectory, "Directory with the compiled shaders");
-    CLI11_PARSE(cli, argc, argv);
-    options.boxExample = options.boxExample || (options.model.empty() && (cli.count("--grid") || cli.count("--seed")));
+    const std::vector<std::string> arguments(argv + 1, argv + argc);
+    thesis::app::ParsedCommand parsed = thesis::app::parseCommandLine(arguments);
+    if (parsed.exitCode) {
+        return *parsed.exitCode;
+    }
+    thesis::app::Options& options = parsed.options;
+    options.program = std::filesystem::absolute(argv[0]);
 
     try {
         if (!options.openResult.empty())
@@ -92,7 +38,12 @@ int main(int argc, char** argv)
         if (options.listEncodings) {
             const auto registry = thesis::app::makeEncodingRegistry();
             for (const auto& entry : registry.entries()) {
-                std::printf("%-22s %s\n", entry.name.c_str(), entry.description.c_str());
+                const auto encoding = registry.create(entry.name);
+                std::string settings;
+                for (const auto& setting : encoding->settings()) {
+                    settings += (settings.empty() ? "" : ", ") + setting.name + " " + setting.value;
+                }
+                std::printf("%-22s %-28s %s\n", entry.name.c_str(), settings.c_str(), entry.description.c_str());
             }
             return 0;
         }

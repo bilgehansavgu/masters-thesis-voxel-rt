@@ -10,7 +10,7 @@
     "glfw3",
     {
       "name": "imgui",
-      "features": [ "glfw-binding", "vulkan-binding" ]
+      "features": [ "docking-experimental", "glfw-binding", "vulkan-binding" ]
     },
     {
       "name": "tracy",

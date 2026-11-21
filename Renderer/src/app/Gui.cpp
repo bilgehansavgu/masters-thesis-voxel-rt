@@ -14,6 +14,89 @@
 #include <filesystem>
 
 namespace thesis::app {
+namespace {
+
+// A plain tool look, as in profilers and debuggers: neutral greys, square corners, thin borders,
+// and colour only where it carries meaning (the selection, a problem, the highlight of a ray).
+void applyStyle()
+{
+    ImGui::StyleColorsDark();
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.WindowPadding = {10, 8};
+    style.FramePadding = {6, 3};
+    style.ItemSpacing = {8, 5};
+    style.ItemInnerSpacing = {5, 4};
+    style.IndentSpacing = 14;
+    style.ScrollbarSize = 12;
+    style.WindowRounding = 0;
+    style.ChildRounding = 0;
+    style.FrameRounding = 2;
+    style.PopupRounding = 2;
+    style.GrabRounding = 2;
+    style.TabRounding = 0;
+    style.ScrollbarRounding = 0;
+    style.WindowBorderSize = 1;
+    style.FrameBorderSize = 1;
+    style.TabBorderSize = 0;
+    style.SeparatorTextBorderSize = 1;
+    style.WindowMenuButtonPosition = ImGuiDir_None;
+
+    const auto grey = [](float level, float alpha = 1.0f) { return ImVec4{level, level, level, alpha}; };
+    const ImVec4 selection{0.24f, 0.32f, 0.42f, 1.0f}; // the one accent: a muted slate blue
+    const ImVec4 selectionHover{0.29f, 0.38f, 0.49f, 1.0f};
+    ImVec4* colors = style.Colors;
+    colors[ImGuiCol_Text] = grey(0.86f);
+    colors[ImGuiCol_TextDisabled] = grey(0.56f);
+    colors[ImGuiCol_WindowBg] = grey(0.13f);
+    colors[ImGuiCol_ChildBg] = grey(0.13f);
+    colors[ImGuiCol_PopupBg] = grey(0.11f);
+    colors[ImGuiCol_MenuBarBg] = grey(0.09f);
+    colors[ImGuiCol_Border] = grey(0.24f);
+    colors[ImGuiCol_BorderShadow] = grey(0.0f, 0.0f);
+    colors[ImGuiCol_FrameBg] = grey(0.18f);
+    colors[ImGuiCol_FrameBgHovered] = grey(0.22f);
+    colors[ImGuiCol_FrameBgActive] = grey(0.25f);
+    colors[ImGuiCol_TitleBg] = grey(0.10f);
+    colors[ImGuiCol_TitleBgActive] = grey(0.10f);
+    colors[ImGuiCol_TitleBgCollapsed] = grey(0.10f);
+    colors[ImGuiCol_ScrollbarBg] = grey(0.11f);
+    colors[ImGuiCol_ScrollbarGrab] = grey(0.27f);
+    colors[ImGuiCol_ScrollbarGrabHovered] = grey(0.33f);
+    colors[ImGuiCol_ScrollbarGrabActive] = grey(0.38f);
+    colors[ImGuiCol_CheckMark] = grey(0.86f);
+    colors[ImGuiCol_SliderGrab] = grey(0.50f);
+    colors[ImGuiCol_SliderGrabActive] = grey(0.62f);
+    colors[ImGuiCol_Button] = grey(0.21f);
+    colors[ImGuiCol_ButtonHovered] = grey(0.27f);
+    colors[ImGuiCol_ButtonActive] = selection;
+    colors[ImGuiCol_Header] = selection;
+    colors[ImGuiCol_HeaderHovered] = selectionHover;
+    colors[ImGuiCol_HeaderActive] = selectionHover;
+    colors[ImGuiCol_Separator] = grey(0.24f);
+    colors[ImGuiCol_SeparatorHovered] = grey(0.40f);
+    colors[ImGuiCol_SeparatorActive] = grey(0.50f);
+    colors[ImGuiCol_ResizeGrip] = grey(0.0f, 0.0f);
+    colors[ImGuiCol_ResizeGripHovered] = grey(0.40f);
+    colors[ImGuiCol_ResizeGripActive] = grey(0.50f);
+    colors[ImGuiCol_Tab] = grey(0.11f);
+    colors[ImGuiCol_TabHovered] = grey(0.22f);
+    colors[ImGuiCol_TabSelected] = grey(0.17f);
+    colors[ImGuiCol_TabSelectedOverline] = selectionHover;
+    colors[ImGuiCol_TabDimmed] = grey(0.11f);
+    colors[ImGuiCol_TabDimmedSelected] = grey(0.15f);
+    colors[ImGuiCol_TabDimmedSelectedOverline] = grey(0.0f, 0.0f);
+    colors[ImGuiCol_DockingPreview] = ImVec4{selection.x, selection.y, selection.z, 0.6f};
+    colors[ImGuiCol_DockingEmptyBg] = grey(0.0f, 0.0f);
+    colors[ImGuiCol_TableHeaderBg] = grey(0.16f);
+    colors[ImGuiCol_TableBorderStrong] = grey(0.24f);
+    colors[ImGuiCol_TableBorderLight] = grey(0.20f);
+    colors[ImGuiCol_TableRowBg] = grey(0.0f, 0.0f);
+    colors[ImGuiCol_TableRowBgAlt] = grey(1.0f, 0.025f);
+    colors[ImGuiCol_TextSelectedBg] = ImVec4{selection.x, selection.y, selection.z, 0.8f};
+    colors[ImGuiCol_NavCursor] = selectionHover;
+}
+
+} // namespace
 
 Gui::Gui(const gpu::Context& context, const Window& window, VkFormat targetFormat, std::uint32_t imageCount)
     : device_(context.device()), targetFormat_(targetFormat)
@@ -28,22 +111,13 @@ Gui::Gui(const gpu::Context& context, const Window& window, VkFormat targetForma
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGui::GetIO().IniFilename = nullptr;
-    ImGui::StyleColorsDark();
-    auto& style = ImGui::GetStyle();
-    style.WindowPadding = {14, 12};
-    style.ItemSpacing = {8, 7};
-    style.FramePadding = {8, 4};
-    style.WindowRounding = 8;
-    style.FrameRounding = 4;
-    style.Colors[ImGuiCol_WindowBg] = {0.07f, 0.10f, 0.13f, 0.98f};
-    style.Colors[ImGuiCol_TextDisabled] = {0.68f, 0.73f, 0.77f, 1};
-    style.Colors[ImGuiCol_TitleBgActive] = {0.09f, 0.19f, 0.21f, 1};
-    style.Colors[ImGuiCol_Button] = {0.10f, 0.34f, 0.37f, 1};
-    style.Colors[ImGuiCol_ButtonHovered] = {0.13f, 0.44f, 0.47f, 1};
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr; // the dock layout is built by the panel each start, not loaded
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    applyStyle();
     // Use the system UI face where available; the embedded face also works on other installations.
     if (std::filesystem::is_regular_file(kInterfaceFontFile)) {
-        ImGui::GetIO().Fonts->AddFontFromFileTTF(kInterfaceFontFile, 17.0f);
+        io.Fonts->AddFontFromFileTTF(kInterfaceFontFile, 16.0f);
     }
     ImGui_ImplGlfw_InitForVulkan(window.handle(), true);
 

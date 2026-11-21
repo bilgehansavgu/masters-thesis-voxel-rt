@@ -18,6 +18,7 @@
 #include <cstring>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -129,6 +130,69 @@ TEST_CASE("every encoding returns the input voxels", "[encoding]")
             CHECK(encoded.statistics.at("voxels").get<std::uint64_t>() == input.model.voxelCount());
         }
     }
+}
+
+TEST_CASE("every encoding has settings of its own", "[encoding]")
+{
+    const encoding::EncodingRegistry registry = makeRegistry();
+    const std::vector<std::string> names = registry.names();
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        INFO(names[i]);
+        const auto encoder = registry.create(names[i]);
+        const std::vector<encoding::EncodingSetting> settings = encoder->settings();
+        // Without settings the window cannot offer the encoding.
+        CHECK_FALSE(settings.empty());
+        for (std::size_t j = 0; j < i; ++j) {
+            INFO("and " << names[j]);
+            CHECK(settings != registry.create(names[j])->settings());
+        }
+        // The twin stores the same bricks with skipping the other way: exactly one setting differs.
+        if (!encoder->skippingTwin().empty()) {
+            const std::vector<encoding::EncodingSetting> twin = registry.create(encoder->skippingTwin())->settings();
+            REQUIRE(twin.size() == settings.size());
+            std::size_t differences = 0;
+            for (std::size_t k = 0; k < settings.size(); ++k) {
+                CHECK(twin[k].name == settings[k].name);
+                differences += twin[k].value != settings[k].value ? 1u : 0u;
+            }
+            CHECK(differences == 1);
+        }
+    }
+}
+
+TEST_CASE("the encoding switches reach every encoding and keep the other settings", "[encoding]")
+{
+    const encoding::EncodingRegistry registry = makeRegistry();
+    const encoding::EncodingChoices choices = encoding::EncodingChoices::of(registry);
+    const std::size_t count = registry.names().size();
+    for (std::size_t from = 0; from < count; ++from) {
+        for (std::size_t to = 0; to < count; ++to) {
+            INFO(registry.names()[from] << " -> " << registry.names()[to]);
+            // Setting each switch to the value of the target, one after the other, ends at the target.
+            std::size_t current = from;
+            for (const encoding::EncodingSetting& wanted : choices.settingsOf(to)) {
+                const std::size_t next = choices.pick(current, wanted.name, wanted.value);
+                CHECK(choices.valueOf(next, wanted.name) == wanted.value);
+                current = next;
+            }
+            CHECK(current == to);
+        }
+    }
+    // Every value of every switch belongs to some encoding.
+    for (const encoding::EncodingChoices::Switch& option : choices.switches()) {
+        for (const std::string& value : option.values) {
+            CHECK_NOTHROW(choices.pick(0, option.setting, value));
+        }
+    }
+    CHECK_THROWS_AS(choices.pick(0, "no such setting", "x"), std::invalid_argument);
+
+    // Two encodings with the same settings are a programming error: the switches could not reach both.
+    CHECK_THROWS_AS(encoding::EncodingChoices({{{"A", "1"}}, {{"A", "1"}}}), std::logic_error);
+    // Keeping the other settings: from (A 1, B 1), setting A to 2 picks (A 2, B 1), not (A 2, B 2).
+    const encoding::EncodingChoices grid(
+        {{{"A", "1"}, {"B", "1"}}, {{"A", "2"}, {"B", "2"}}, {{"A", "2"}, {"B", "1"}}});
+    CHECK(grid.pick(0, "A", "2") == 2);
+    CHECK(grid.describe(2) == "A 2, B 1");
 }
 
 TEST_CASE("brick bounds enclose exactly the filled voxels", "[encoding]")

@@ -7,11 +7,14 @@
 #include "thesis/core/Camera.h"
 #include "thesis/core/Scene.h"
 #include "thesis/encoding/Encoding.h"
+#include "thesis/resolve/ShadingParams.h"
 #include "thesis/tracing/Tracer.h"
 #include "thesis/voxel/VoxelModel.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -29,6 +32,9 @@ struct BuiltScene {
     double encodeSeconds = 0.0;
     nlohmann::json statistics;                // what the encoding reports about its data; null without encoding
     std::vector<encoding::BrickPlace> bricks; // the brick of each primitive; empty for the box field
+    // The voxel model in bricks of `brickSize`, null for the box field. Shared, so the window can
+    // read its bricks while the source builds the next scene on another thread.
+    std::shared_ptr<const voxel::VoxelModel> model;
 };
 
 // What the program shows: the box field of step 0, or a voxel model (--model) that can be
@@ -46,9 +52,15 @@ public:
 
     explicit SceneSource(const Options& options);
 
-    [[nodiscard]] bool isVoxelModel() const { return model_.has_value(); }
+    [[nodiscard]] bool isVoxelModel() const { return model_ != nullptr; }
+    // The .voxels file of the model; empty for the box field.
+    [[nodiscard]] const std::filesystem::path& modelFile() const { return modelFile_; }
     // The encodings to choose from, in registration order. Empty for the box field.
     [[nodiscard]] const std::vector<EncodingChoice>& encodings() const { return encodings_; }
+    // The settings of every encoding and the switches they make. Empty for the box field.
+    [[nodiscard]] const encoding::EncodingChoices& encodingChoices() const { return choices_; }
+    // Index into encodings() of the encoding called `name`. Throws std::invalid_argument if there is none.
+    [[nodiscard]] std::size_t encodingIndex(const std::string& name) const;
     // Index into encodings() of the encoding named by --encoding, or else of the default encoding.
     [[nodiscard]] std::size_t initialEncoding() const { return initialEncoding_; }
     // The brick sizes to choose from. Empty for the box field.
@@ -61,27 +73,38 @@ public:
     [[nodiscard]] BuiltScene build(std::size_t encoding, std::uint32_t brickSize);
     // The scene of the command line.
     [[nodiscard]] BuiltScene build() { return build(initialEncoding_, initialBrickSize_); }
-    // The voxels of the brick at `coordinate` (in bricks) of the model in bricks of `brickSize`, or
-    // nullptr when that brick is empty or the scene is not a voxel model. For the ray walk of the window.
-    [[nodiscard]] const voxel::VoxelBrick* findBrick(std::uint32_t brickSize, glm::uvec3 coordinate);
 
 private:
     // The model in bricks of `brickSize`: the model of the file, or a regrouped copy of it.
-    [[nodiscard]] const voxel::VoxelModel& modelWithBricksOf(std::uint32_t brickSize);
+    [[nodiscard]] std::shared_ptr<const voxel::VoxelModel> modelWithBricksOf(std::uint32_t brickSize);
 
     std::uint32_t gridSize_;
     std::uint32_t seed_;
-    std::optional<voxel::VoxelModel> model_;     // as it is in the file
-    std::optional<voxel::VoxelModel> regrouped_; // the last copy with another brick size
+    std::filesystem::path modelFile_;
+    std::shared_ptr<const voxel::VoxelModel> model_;     // as it is in the file
+    std::shared_ptr<const voxel::VoxelModel> regrouped_; // the last copy with another brick size
     encoding::EncodingRegistry registry_;
     std::vector<EncodingChoice> encodings_;
+    encoding::EncodingChoices choices_{{}};
     std::size_t initialEncoding_ = 0;
     std::vector<std::uint32_t> brickSizes_;
     std::uint32_t initialBrickSize_ = 0;
 };
 
-// The camera at the start: the one that shows all of `bounds`, changed by --camera.
+// The voxels of the brick at `coordinate` (in bricks) of `model`, or nullptr when that brick is
+// empty. For the ray walk of the window.
+[[nodiscard]] const voxel::VoxelBrick* findBrick(const voxel::VoxelModel& model, glm::uvec3 coordinate);
+
+// The voxel files (.voxels) in `directory`, sorted by name. Empty if the directory does not exist.
+[[nodiscard]] std::vector<std::filesystem::path> listModels(const std::filesystem::path& directory);
+
+// The camera at the start: the one that shows all of `bounds`, changed by --camera, or the exact
+// camera of --exact-camera.
 [[nodiscard]] core::OrbitCamera startCamera(const Options& options, const core::Bounds& bounds);
+
+// How the frame is shaded at the start: --view, --scale-max, --log-scale, --light and
+// --distance-range. Without --distance-range the distance view spans twice the camera distance.
+[[nodiscard]] resolve::ShadingParams startShading(const Options& options, const core::OrbitCamera& camera);
 
 // All tracers built into the program, in registration order.
 [[nodiscard]] tracing::TracerRegistry makeTracerRegistry();

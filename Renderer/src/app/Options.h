@@ -43,11 +43,15 @@ struct Options {
     // The camera at the start: yaw and pitch in degrees, then the distance as a factor of the
     // distance that shows the whole scene. Benchmark: where the orbit starts and how far out it is.
     std::vector<float> camera{35.0f, 30.0f, 1.0f};
-    std::uint32_t view = 1; // screenshot: the view, numbered as in the panel of the window (1 to 12)
+    std::uint32_t view = 1; // the view, numbered as in the panel of the window (1 to 12)
     // Screenshot of a count view (--view 6, 7, 8, 10 or 11): the count at the end of the colour map,
     // and a log2 instead of a linear scale. The image gets the colour bar below it.
     float scaleMaximum = 64.0f;
     bool logScale = false;
+    // The light of the lit views (1 and 5): azimuth and elevation in degrees. Empty: the default light.
+    std::vector<float> light;
+    // The distance view (2): the distances shown as white and black. Empty: 0 to twice the camera distance.
+    std::vector<float> distanceRange;
     // The ray inspector on pixel (x, y) of the frame. Window: it starts on that ray. Screenshot:
     // it also prints every step of that ray. Empty: off.
     std::vector<std::uint32_t> inspect;
@@ -63,6 +67,7 @@ struct Options {
     std::filesystem::path outputDirectory = "results";
 
     // Infrastructure
+    std::filesystem::path program; // this program as an absolute path, for "Copy as command"
     bool validation = false;
     std::uint32_t exitAfterFrames = 0; // interactive: close after this many frames (smoke tests)
     bool selfTest = false;             // interactive: use every control of the panel once, then close

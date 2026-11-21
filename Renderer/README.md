@@ -111,37 +111,49 @@ build/src/app/Release/thesis_renderer.exe --open-result path/to/fixed-view-resul
 ```
 
 The window opens on Lucy (`Models/lucy-2048.voxels`) if that file exists, otherwise on a field of
-solid boxes. It has three tabs.
+solid boxes. Docked areas sit around the image (drag a tab to rearrange them):
 
-**Explore** explains what the renderer does, in plain words:
+**Settings** (left), in the order a ray meets them:
 
-- *What you see*: Surface, Voxels or Bricks, each with one sentence about what the colours mean.
-- *How the ray finds the surface*: the search method, with one sentence about how it works.
-  **Show the search structure** (key S) draws a horizontal cut through the structure at the
-  **Cut height**: the cells of the uniform grid (blue: a cell with a brick), the cubes of the
-  sparse octree (grey: empty space that is not divided further), the boxes of the software BVH at
-  one **Tree level**, or the brick boxes that the GPU gets for its own tree. The panel counts them,
-  for example how many squares the octree needs for a cut that takes the grid hundreds of cells.
-- *Follow one ray*: **Pick a pixel** (or right-click without moving). **Next** and **Previous** (arrow keys) step
-  through the ray: the ray, the search (the grid cells, octree cubes or BVH boxes that the ray
-  visited, in gold; for hardware only the bricks that the GPU handed over), the brick, the
-  columns inside the brick, and the voxel it hit. **Side view** (key V) shows the ray from the
-  side. The camera moves only on Side view. Changing the search method records the same pixel
-  again and shows the work of both methods side by side.
+- *Scene*: the model, every `.voxels` file in `../Models` and the box field. A model loads in the
+  background; the status bar says so. A model that cannot be built shows why, and the window
+  keeps the scene before.
+- *Encoding*: one switch per setting of the encodings (layout, mipmap), and the brick size.
+- *Rays*: the ray order (rows or tiles) and the camera presets of the benchmark plan (standard
+  x1, close x0.35, near x0.18).
+- *Search*: the tracer, with the memory of its search structure.
+- *Output*: the view, the light of the lit views, the colour scale of the count views.
 
-Lines behind the model are drawn faint: the window reads the distance to the surface of each
-pixel once each time the camera stops.
+**Image** (middle). A count view has its colour bar on the image; the mouse over it shows the
+count of a colour.
 
-**Measure** has **Compare two settings at this view**: it runs the benchmark protocol twice at the
-current camera (skipping off/on, or a second tracer) on one frozen buffer of camera rays. It
-checks that both runs got the same rays, and compares the hits with the rule of the agreement test,
-so a last-bit difference in a distance does not count. Both results files are saved together.
-**Open this view in Explore** restores the camera, tracer and encoding of a row. The command line
-benchmark accepts `--fixed-view` for a stationary camera; its default camera path is a full orbit.
-Below that, the quick live timings of the window, which are not for the thesis.
+**Inspector** (right). **Show the search structure** (key S) draws a horizontal cut through the
+structure of the tracer at the **Cut height**: grid cells, octree cubes, BVH boxes at one **Tree
+level**, or the brick boxes that the GPU gets for its own tree, with their counts. **Pick a pixel**
+(or a right click without moving) records its ray on the GPU; the arrow keys step through its
+stages: the ray, the search (cells, cubes or boxes visited, in gold; for hardware only the bricks
+that the GPU handed over), the brick, the columns inside the brick, and the voxel it hit. **Side
+view** (key V) shows the ray from the side. Another tracer records the same pixel again and shows
+the work of both. **Ray log** lists every recorded step. Lines behind the model are drawn faint:
+the window reads the distance to the surface of each pixel once each time the camera stops.
 
-**Controls** contains the encodings, the brick sizes, all views (including the work views) and the
-switch between the voxel model and the box scene.
+**Measurements** (under the image):
+
+- *Timing*: quick live timing of every tracer at this camera (key M) and the stages of the frame
+  on screen. Window numbers, not thesis numbers.
+- *Work per ray*: the average work of a ray in the frame, with a work view on.
+- *Compare view*: the benchmark protocol twice at the current camera (mipmap off/on, or a second
+  tracer) on one frozen buffer of camera rays. Both runs get the same rays, and the hits are
+  compared with the rule of the agreement test. Both results files are saved together. **Show**
+  restores the camera, tracer and encoding of a row. The command line benchmark accepts
+  `--fixed-view` for a stationary camera; its default camera path is a full orbit.
+- *Memory*: every buffer of the scene, and the size of each encoding at this brick size.
+- *Command*: the `thesis_renderer` command that makes the frame on screen (screenshot) or measures
+  its scene (benchmark: an orbit at a camera preset, else a fixed view at this camera), with
+  buttons that copy them.
+
+The **status bar** at the bottom always shows the model, the encoding settings, the brick size,
+the ray order, the camera, the tracer, the view and the trace time.
 
 In the window: left-drag to orbit, scroll to zoom. Hold the right button to fly: the mouse turns
 the view, **W/A/S/D** move, **Q/E** go down and up, **Shift** is faster, scrolling sets the speed. **Tab** switches the tracer, **E** the encoding,
@@ -185,13 +197,18 @@ white above `--scale-max <count>` (default 64), linear or with `--log-scale` log
 into bricks of that size before the encoding.
 `--camera <yaw> <pitch> <factor>` sets the camera at the start: two angles in degrees, and the
 distance as a factor of the distance that shows the whole scene. For the benchmark it is the
-start and the radius of the orbit.
+start and the radius of the orbit. `--exact-camera <x> <y> <z> <yaw> <pitch> <distance>` sets the
+camera as the window has it (target, angles, distance), as "Copy as command" writes it.
+`--light <azimuth> <elevation>` (degrees) moves the light of views 1 and 5, `--distance-range
+<near> <far>` sets the range of view 2. `--view`, `--scale-max`, `--log-scale` and `--light` set
+the start of the window too.
 `--ray-order rows|tiles` sets where the ray of each pixel sits in the ray list. The GPU traces
 32 neighbouring rays of the list together. With `rows` (the default) these are 32 pixels of one
 row; with `tiles` they are a tile of 8 x 4 pixels. The image is the same either way; only the
 speed can change. The rule is in `shared/include/thesis/shared/RayOrder.h`.
-`--list-tracers` and `--list-encodings` print what is built in. `--self-test` uses every
-control of the window once and closes it (a smoke test of the window).
+`--list-tracers` and `--list-encodings` print what is built in (an encoding with its settings).
+`--self-test` uses every control of the window once, then checks "Copy as command": it renders
+the frame on screen again from its screenshot command and exits with code 3 if one pixel differs.
 
 ### Many runs at once
 

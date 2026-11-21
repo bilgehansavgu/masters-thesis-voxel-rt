@@ -23,6 +23,13 @@ struct BrickPlace {
     int columnAxis = 1;
 };
 
+// One design choice of an encoding, for people: the name of the setting and its value here.
+struct EncodingSetting {
+    std::string name;
+    std::string value;
+    bool operator==(const EncodingSetting&) const = default;
+};
+
 // What an encoding makes of a voxel model.
 struct EncodedModel {
     // One primitive per brick. `primitiveBounds` are the boxes around the filled voxels of each
@@ -62,9 +69,45 @@ public:
     // The encoding that stores the same bricks with skipping switched the other way, or empty if
     // there is none. The window and the benchmark compare the two ("skipping off / on").
     [[nodiscard]] virtual std::string skippingTwin() const { return {}; }
+    // The design choices that make this encoding, as (setting, value) pairs for people, e.g.
+    // ("Layout", "inline") and ("Mipmap", "on"). No two encodings have the same list. The window
+    // builds one switch per setting from these lists (EncodingChoices), so it never names an encoding.
+    [[nodiscard]] virtual std::vector<EncodingSetting> settings() const { return {}; }
 };
 
 using EncodingRegistry = core::Registry<IEncoding>;
+
+// The settings of every encoding of a registry, and the switches they make. A switch is one
+// setting with every value that some encoding has. Picking a value picks the encoding that has
+// that value and keeps as many of the other settings as it can.
+class EncodingChoices {
+public:
+    struct Switch {
+        std::string setting;
+        std::vector<std::string> values; // in the order the encodings were registered
+    };
+
+    // One list of settings per encoding, in registry order.
+    explicit EncodingChoices(std::vector<std::vector<EncodingSetting>> settingsOfEach);
+    [[nodiscard]] static EncodingChoices of(const EncodingRegistry& registry);
+
+    [[nodiscard]] const std::vector<Switch>& switches() const { return switches_; }
+    [[nodiscard]] const std::vector<EncodingSetting>& settingsOf(std::size_t encoding) const
+    {
+        return settings_.at(encoding);
+    }
+    // The value of `setting` in `encoding`, or empty if that encoding has no such setting.
+    [[nodiscard]] std::string valueOf(std::size_t encoding, std::string_view setting) const;
+    // The encoding to show when the user sets `setting` to `value`, starting from `current`.
+    // Throws std::invalid_argument if no encoding has that value.
+    [[nodiscard]] std::size_t pick(std::size_t current, std::string_view setting, std::string_view value) const;
+    // "Layout inline, Mipmap off": the settings of `encoding` for people.
+    [[nodiscard]] std::string describe(std::size_t encoding) const;
+
+private:
+    std::vector<std::vector<EncodingSetting>> settings_;
+    std::vector<Switch> switches_;
+};
 
 // The size of every buffer of an encoded scene, in the order the GPU gets them.
 struct MemoryReport {

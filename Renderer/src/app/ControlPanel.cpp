@@ -101,6 +101,57 @@ void ControlPanel::selectModel(std::size_t index)
     }
 }
 
+void ControlPanel::requestImport(MeshImportRequest request)
+{
+    if (!measuring() && loading_.empty()) {
+        importRequest_ = std::move(request);
+        problem_.clear();
+        rememberFile("meshes", importRequest_->mesh);
+    }
+}
+
+void ControlPanel::requestOpen(std::filesystem::path voxelFile)
+{
+    if (!measuring() && loading_.empty() && !voxelFile.empty()) {
+        openRequest_ = std::move(voxelFile);
+        problem_.clear();
+    }
+}
+
+void ControlPanel::requestModelListChange(ModelListRequest request)
+{
+    const std::filesystem::path& shown = facts_.models.at(facts_.model);
+    const std::filesystem::path& wanted = facts_.models.at(wantedModel_);
+    if (measuring() || !loading_.empty() || request.file.empty() || request.file == shown || request.file == wanted)
+        return;
+    try {
+        recent_.remove(request.file);
+    } catch (const std::exception& error) {
+        problem_ = error.what();
+    }
+    modelListRequest_ = std::move(request);
+}
+
+void ControlPanel::setModelList(std::vector<std::filesystem::path> models,
+                                std::vector<std::optional<voxel::VoxelFileSummary>> summaries, std::size_t model)
+{
+    if (model >= models.size() || summaries.size() != models.size())
+        throw std::logic_error("setModelList: the model on screen or a header is missing from the list");
+    facts_.models = std::move(models);
+    facts_.modelSummaries = std::move(summaries);
+    facts_.model = model;
+    wantedModel_ = model;
+}
+
+void ControlPanel::rememberFile(const std::string& kind, const std::filesystem::path& file)
+{
+    try {
+        recent_.add(kind, file);
+    } catch (const std::exception& error) {
+        problem_ = error.what(); // the file still opens; only the list of recent files is not saved
+    }
+}
+
 void ControlPanel::selectEncodingSetting(const std::string& setting, const std::string& value)
 {
     if (facts_.encodings.empty() || measuring() || !loading_.empty())
@@ -153,6 +204,8 @@ void ControlPanel::setFacts(PanelFacts facts)
     stopInspecting();
     const std::string previous = facts_.tracers.at(activeTracer_).name;
     facts_ = std::move(facts);
+    if (const std::filesystem::path& shown = facts_.models.at(facts_.model); !shown.empty())
+        rememberFile("models", shown);
     structure_ = {};
     depthVersion_ = 0;
     const auto same = std::find_if(facts_.tracers.begin(), facts_.tracers.end(),

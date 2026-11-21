@@ -2,16 +2,25 @@
 
 #include "ControlPanel.h"
 
+#include "FileDialog.h"
 #include "PanelWidgets.h"
+#include "ShellFiles.h"
 
+#include "thesis/mesh/TriangleMesh.h"
 #include "thesis/shared/RayOrder.h"
 
 #include <glm/geometric.hpp>
 #include <imgui.h>
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <cmath>
+#include <filesystem>
 #include <format>
+#include <string>
+#include <string_view>
+#include <system_error>
 
 namespace thesis::app {
 namespace {
@@ -26,6 +35,65 @@ std::string modelName(const std::filesystem::path& model)
 const char* rayOrderName(std::uint32_t order)
 {
     return order == THESIS_RAY_ORDER_TILES ? "tiles 8x4" : "rows";
+}
+
+// The resolutions "Import mesh" offers in its list: multiples of every brick size.
+constexpr std::array<std::uint32_t, 7> kImportResolutions{128, 256, 512, 1024, 2048, 4096, 8192};
+// A typed resolution: a multiple of the largest brick size, so every brick size divides the grid.
+constexpr std::uint32_t kResolutionStep = 32;
+constexpr std::uint32_t kMaxResolution = 16384;
+
+// ImGui text is UTF-8; a path of the file system may hold any character.
+std::string utf8(const std::filesystem::path& path)
+{
+    const std::u8string text = path.u8string();
+    return {text.begin(), text.end()};
+}
+
+// The path typed or pasted into a text field. Surrounding spaces and quotes go: Windows
+// "Copy as path" puts the path in quotes.
+std::filesystem::path pathFromField(std::string_view text)
+{
+    const auto isTrimmed = [](char c) { return c == ' ' || c == '\t' || c == '"' || c == '\''; };
+    while (!text.empty() && isTrimmed(text.front()))
+        text.remove_prefix(1);
+    while (!text.empty() && isTrimmed(text.back()))
+        text.remove_suffix(1);
+    return std::filesystem::path(std::u8string(text.begin(), text.end()));
+}
+
+// The kinds of file the dialogs offer.
+std::vector<FileFilter> meshFilters()
+{
+    FileFilter filter{"Mesh files", {}};
+    for (const std::string& extension : mesh::meshFileExtensions())
+        filter.extensions.push_back(extension.substr(1));
+    return {filter};
+}
+
+const std::vector<FileFilter> kVoxelFilters{{"Voxel files", {"voxels"}}};
+
+// A number of voxels or bricks for people: 56.7 M, 93,970.
+std::string formatCount(std::uint64_t count)
+{
+    if (count >= 10'000'000)
+        return std::format("{:.1f} M", static_cast<double>(count) / 1e6);
+    std::string digits = std::to_string(count);
+    for (std::ptrdiff_t at = static_cast<std::ptrdiff_t>(digits.size()) - 3; at > 0; at -= 3)
+        digits.insert(static_cast<std::size_t>(at), ",");
+    return digits;
+}
+
+// Runs the file dialog; a dialog that cannot open shows as a problem.
+std::optional<std::filesystem::path> pickWithDialog(const std::vector<FileFilter>& filters,
+                                                    const std::filesystem::path& start, std::string& problem)
+{
+    try {
+        return pickFile(filters, start);
+    } catch (const std::exception& error) {
+        problem = error.what();
+        return std::nullopt;
+    }
 }
 
 // A section of the settings: a header that stays open unless the user closes it.
@@ -57,21 +125,359 @@ void ControlPanel::drawSceneSettings()
     if (!section("Scene"))
         return;
     const bool locked = measuring() || !loading_.empty();
+    const ImGuiStyle& style = ImGui::GetStyle();
     rowLabel("Model");
-    ImGui::SetNextItemWidth(-FLT_MIN);
+    const float openWidth = ImGui::CalcTextSize("Open...").x + 2.0f * style.FramePadding.x;
+    ImGui::SetNextItemWidth(-(openWidth + style.ItemSpacing.x));
     if (ImGui::BeginCombo("##model", modelName(facts_.models.at(wantedModel_)).c_str())) {
         for (std::size_t i = 0; i < facts_.models.size(); ++i) {
             if (ImGui::Selectable(modelName(facts_.models[i]).c_str(), i == wantedModel_) && !locked)
                 selectModel(i);
+            if (!facts_.models[i].empty()) {
+                ImGui::SetItemTooltip("%s\nRight click: show in Explorer, remove", utf8(facts_.models[i]).c_str());
+                drawModelMenu(facts_.models[i], true, locked);
+            }
+        }
+        // Files opened in earlier runs that are not in the list: opening one adds it.
+        std::vector<std::filesystem::path> recent;
+        for (const std::filesystem::path& file : recent_.list("models")) {
+            const bool listed = std::any_of(facts_.models.begin(), facts_.models.end(), [&](const auto& model) {
+                std::error_code error;
+                return !model.empty() && std::filesystem::equivalent(model, file, error);
+            });
+            if (!listed)
+                recent.push_back(file);
+        }
+        if (!recent.empty()) {
+            ImGui::SeparatorText("Recent");
+            for (std::size_t i = 0; i < recent.size(); ++i) {
+                if (ImGui::Selectable(std::format("{}##recent{}", utf8(recent[i].filename()), i).c_str()) && !locked)
+                    requestOpen(recent[i]);
+                ImGui::SetItemTooltip("%s\nRight click: show in Explorer, remove", utf8(recent[i]).c_str());
+                drawModelMenu(recent[i], false, locked);
+            }
         }
         ImGui::EndCombo();
     }
+    drawRecycleConfirm();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(locked);
+    if (ImGui::Button("Open...")) {
+        if (auto file = pickWithDialog(kVoxelFilters, facts_.importDirectory, problem_))
+            requestOpen(*file);
+    }
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip("Opens a voxel file (.voxels) from any folder. It joins the model list.");
+    drawModelFacts();
+    drawLoadingProgress();
+    drawImportMesh();
+}
+
+void ControlPanel::drawModelMenu(const std::filesystem::path& file, bool listed, bool locked)
+{
+    if (!ImGui::BeginPopupContextItem())
+        return;
+    if (ImGui::MenuItem("Show in Explorer")) {
+        try {
+            revealFile(file);
+        } catch (const std::exception& error) {
+            problem_ = error.what();
+        }
+    }
+    // The model on screen (or on its way) stays: the window always shows a model of the list.
+    const bool inUse = file == facts_.models.at(facts_.model) || file == facts_.models.at(wantedModel_);
+    if (!listed) {
+        // A recent file is not loaded: it only leaves the list of recent files.
+        if (ImGui::MenuItem("Remove from recent")) {
+            try {
+                recent_.remove(file);
+            } catch (const std::exception& error) {
+                problem_ = error.what();
+            }
+        }
+        ImGui::EndPopup();
+        return;
+    }
+    if (ImGui::MenuItem("Remove from list", nullptr, false, !inUse && !locked))
+        requestModelListChange({ModelListRequest::Action::Remove, file});
+    std::error_code error;
+    const bool inModelFolder = std::filesystem::equivalent(file.parent_path(), facts_.importDirectory, error);
+    ImGui::SetItemTooltip(inModelFolder ? "The file stays. It is in the model folder, so it is back at the next start."
+                                        : "The file stays where it is.");
+    if (ImGui::MenuItem("Move to Recycle Bin...", nullptr, false, !inUse && !locked)) {
+        recycleCandidate_ = file;
+        openRecycleConfirm_ = true;
+    }
+    if (inUse)
+        ImGui::TextDisabled("The model on screen stays in the list.");
+    ImGui::EndPopup();
+}
+
+void ControlPanel::drawRecycleConfirm()
+{
+    constexpr const char* kTitle = "Move to Recycle Bin?";
+    if (std::exchange(openRecycleConfirm_, false))
+        ImGui::OpenPopup(kTitle);
+    if (!ImGui::BeginPopupModal(kTitle, nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+    const std::filesystem::path file = recycleCandidate_.value_or(std::filesystem::path{});
+    std::error_code error;
+    const std::uintmax_t bytes = std::filesystem::file_size(file, error);
+    ImGui::TextUnformatted(utf8(file.filename()).c_str());
+    ImGui::TextDisabled("%s, in %s", error ? "size unknown" : formatBytes(bytes).c_str(),
+                        utf8(file.parent_path()).c_str());
+    ImGui::TextUnformatted("It leaves the model list. You can restore it from the Recycle Bin.");
+    ImGui::Spacing();
+    if (ImGui::Button("Move to Recycle Bin")) {
+        requestModelListChange({ModelListRequest::Action::Recycle, file});
+        recycleCandidate_.reset();
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        recycleCandidate_.reset();
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
+void ControlPanel::drawModelFacts()
+{
     ImGui::TextDisabled("%s", facts_.sceneDetails.c_str());
-    if (facts_.voxelCount > 0)
-        ImGui::TextDisabled("%llu voxels, %u bricks", static_cast<unsigned long long>(facts_.voxelCount),
-                            facts_.primitiveCount);
-    else
+    if (facts_.voxelCount == 0) {
         ImGui::TextDisabled("%u boxes", facts_.primitiveCount);
+        return;
+    }
+    const double brickVoxels = std::pow(static_cast<double>(facts_.brickSize), 3.0);
+    const double filled =
+        static_cast<double>(facts_.voxelCount) / (static_cast<double>(facts_.primitiveCount) * brickVoxels);
+    ImGui::TextDisabled("%s voxels in %s bricks, %.1f%% filled", formatCount(facts_.voxelCount).c_str(),
+                        formatCount(facts_.primitiveCount).c_str(), 100.0 * filled);
+    helpMarker(std::format("Filled: the voxels divided by the voxels of all bricks ({} bricks x {}^3). The rest of "
+                           "each brick is empty space that the brick test steps through.",
+                           facts_.primitiveCount, facts_.brickSize)
+                   .c_str());
+    const std::optional<voxel::VoxelFileSummary>& summary =
+        facts_.model < facts_.modelSummaries.size() ? facts_.modelSummaries[facts_.model] : std::nullopt;
+    if (summary) {
+        ImGui::TextDisabled("file %s, read in %.0f ms", formatBytes(summary->fileBytes).c_str(),
+                            facts_.loadMilliseconds);
+        ImGui::SetItemTooltip("%s", utf8(facts_.models.at(facts_.model)).c_str());
+    }
+}
+
+void ControlPanel::drawLoadingProgress()
+{
+    if (loading_.empty())
+        return;
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float cancelWidth = loadingProgress_.cancellable
+                                  ? ImGui::CalcTextSize("Cancel").x + 2.0f * style.FramePadding.x + style.ItemSpacing.x
+                                  : 0.0f;
+    // No share known: a moving bar (a negative fraction in ImGui).
+    const float fraction = loadingProgress_.done ? *loadingProgress_.done : -static_cast<float>(ImGui::GetTime());
+    const std::string label = loadingProgress_.done ? std::format("{:.0f}%", 100.0f * *loadingProgress_.done) : "";
+    ImGui::ProgressBar(fraction, ImVec2(-cancelWidth, 0.0f), label.empty() ? nullptr : label.c_str());
+    ImGui::SetItemTooltip("%s", loading_.c_str());
+    if (loadingProgress_.cancellable) {
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel"))
+            cancelRequest_ = true;
+        ImGui::SetItemTooltip("Stops the import. No voxel file is written.");
+    }
+}
+
+void ControlPanel::drawImportMesh()
+{
+    if (!ImGui::TreeNodeEx("Import mesh", ImGuiTreeNodeFlags_SpanAvailWidth))
+        return;
+    const bool locked = measuring() || !loading_.empty();
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const auto setPath = [this](const std::filesystem::path& path) {
+        const std::string text = utf8(path);
+        if (text.size() >= importPath_.size()) {
+            problem_ = "The path is too long for the field: " + text;
+            return;
+        }
+        std::copy(text.begin(), text.end(), importPath_.begin());
+        importPath_[text.size()] = '\0';
+    };
+
+    // The path field, a list of recent meshes and the file dialog, on one line.
+    rowLabel("Mesh file");
+    const float browseWidth = ImGui::CalcTextSize("Browse...").x + 2.0f * style.FramePadding.x;
+    ImGui::SetNextItemWidth(-(ImGui::GetFrameHeight() + browseWidth + style.ItemSpacing.x));
+    ImGui::InputTextWithHint("##import path", ".ply, .obj, .gltf or .glb", importPath_.data(), importPath_.size());
+    ImGui::SameLine(0.0f, 0.0f);
+    const std::vector<std::filesystem::path> recentMeshes = recent_.list("meshes");
+    ImGui::BeginDisabled(recentMeshes.empty());
+    if (ImGui::BeginCombo("##recent meshes", nullptr, ImGuiComboFlags_NoPreview | ImGuiComboFlags_PopupAlignLeft)) {
+        for (std::size_t i = 0; i < recentMeshes.size(); ++i) {
+            if (ImGui::Selectable(std::format("{}##mesh{}", utf8(recentMeshes[i].filename()), i).c_str()))
+                setPath(recentMeshes[i]);
+            ImGui::SetItemTooltip("%s", utf8(recentMeshes[i]).c_str());
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip("Recent mesh files");
+    ImGui::SameLine();
+    const std::filesystem::path mesh = pathFromField(importPath_.data());
+    ImGui::BeginDisabled(locked);
+    if (ImGui::Button("Browse...")) {
+        // Start where the mesh of the field or the last mesh is.
+        std::filesystem::path start = mesh.parent_path();
+        if (start.empty() && !recentMeshes.empty())
+            start = recentMeshes.front().parent_path();
+        if (auto file = pickWithDialog(meshFilters(), start, problem_))
+            setPath(*file);
+    }
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip("Picks a mesh file: PLY, OBJ, glTF (.gltf, .glb).");
+
+    drawImportResolution();
+    voxel::VoxelizeOptions& voxelize = importChoice_.voxelize;
+
+    rowLabel("Up axis");
+    for (const voxel::UpAxis axis : {voxel::UpAxis::Y, voxel::UpAxis::Z}) {
+        if (axis != voxel::UpAxis::Y)
+            ImGui::SameLine();
+        const std::string label = std::format("+{}##import up", voxel::upAxisName(axis));
+        if (ImGui::RadioButton(label.c_str(), importChoice_.upAxis == axis))
+            importChoice_.upAxis = axis;
+    }
+    helpMarker("The axis of the mesh that points up. The renderer uses +y. Scans such as Lucy use +z: they are "
+               "turned a quarter turn around x.");
+
+    rowLabel("Rule");
+    for (const voxel::VoxelizationRule rule :
+         {voxel::VoxelizationRule::Sampled, voxel::VoxelizationRule::Conservative}) {
+        if (rule != voxel::VoxelizationRule::Sampled)
+            ImGui::SameLine();
+        const std::string label = std::format("{}##import rule", voxel::ruleName(rule));
+        if (ImGui::RadioButton(label.c_str(), voxelize.rule == rule))
+            voxelize.rule = rule;
+    }
+    helpMarker("sampled: Reichl et al. 2012. A line through the centre of every grid column, along each axis; a voxel "
+               "is filled where a line crosses a triangle. Thin, and no ray passes through the surface.\n"
+               "conservative: every voxel that a triangle touches is filled. Thicker.");
+
+    // The file the import would read and the voxel file it would write.
+    std::error_code error;
+    const char* issue = nullptr;
+    if (voxelize.resolution % kResolutionStep != 0)
+        issue = "Resolution: not a multiple of 32";
+    else if (!mesh.empty() && !std::filesystem::is_regular_file(mesh, error))
+        issue = "No such file";
+    else if (!mesh.empty() && !mesh::isMeshFile(mesh))
+        issue = "Not a mesh file (.ply, .obj, .gltf, .glb)";
+    if (!mesh.empty() && issue == nullptr)
+        drawImportEstimate(mesh);
+    ImGui::BeginDisabled(locked || mesh.empty() || issue != nullptr);
+    if (ImGui::Button("Import")) {
+        importChoice_.mesh = mesh;
+        requestImport(importChoice_);
+    }
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip("Voxelizes the mesh on a worker thread, writes the voxel file to the model folder and "
+                          "opens it. Cancel stops it. Same as: thesis_model voxelize.");
+    if (issue) {
+        ImGui::SameLine();
+        ImGui::TextColored(kProblemColor, "%s", issue);
+    } else if (!mesh.empty()) {
+        voxel::MeshImportOptions options{importChoice_.voxelize, importChoice_.upAxis, {}, facts_.importDirectory};
+        const std::filesystem::path target = voxel::importTarget(mesh, options);
+        ImGui::SameLine();
+        ImGui::TextDisabled("to %s", utf8(target.filename()).c_str());
+        if (std::filesystem::exists(target, error)) {
+            ImGui::SameLine();
+            ImGui::TextColored(kHighlightColor, "(replaces)");
+            ImGui::SetItemTooltip("A voxel file of this name is in the model folder. The import writes over it.");
+        }
+    }
+    ImGui::TreePop();
+}
+
+void ControlPanel::drawImportResolution()
+{
+    voxel::VoxelizeOptions& voxelize = importChoice_.voxelize;
+    rowLabel("Resolution");
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5.5f);
+    const std::string preview = customResolution_ ? std::string("custom") : std::to_string(voxelize.resolution);
+    if (ImGui::BeginCombo("##import resolution", preview.c_str())) {
+        for (const std::uint32_t resolution : kImportResolutions) {
+            if (ImGui::Selectable(std::to_string(resolution).c_str(),
+                                  !customResolution_ && voxelize.resolution == resolution)) {
+                voxelize.resolution = resolution;
+                customResolution_ = false;
+            }
+        }
+        if (ImGui::Selectable("custom", customResolution_))
+            customResolution_ = true;
+        ImGui::EndCombo();
+    }
+    if (customResolution_) {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 7.0f);
+        int value = static_cast<int>(voxelize.resolution);
+        if (ImGui::InputInt("##custom resolution", &value, static_cast<int>(kResolutionStep), 256))
+            voxelize.resolution = static_cast<std::uint32_t>(
+                std::clamp(value, static_cast<int>(kResolutionStep), static_cast<int>(kMaxResolution)));
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("voxels");
+    helpMarker(std::format("Voxels along the longest side of the mesh. The voxels lie on the surface, so their number "
+                           "and the time grow with the square of the resolution. The models of the thesis use 2048.\n"
+                           "custom: any multiple of {} up to {}, so that every brick size divides the grid.",
+                           kResolutionStep, kMaxResolution)
+                   .c_str());
+}
+
+void ControlPanel::drawImportEstimate(const std::filesystem::path& mesh)
+{
+    // An earlier import of the same mesh with the same rule: the one nearest in resolution.
+    const voxel::VoxelizeOptions& voxelize = importChoice_.voxelize;
+    const std::string meshName = utf8(mesh.stem());
+    const std::string_view rule = voxel::ruleName(voxelize.rule);
+    std::size_t from = facts_.models.size();
+    double nearest = 0.0;
+    for (std::size_t i = 0; i < facts_.modelSummaries.size(); ++i) {
+        const std::optional<voxel::VoxelFileSummary>& summary = facts_.modelSummaries[i];
+        if (!summary || summary->source.mesh != meshName || summary->source.rule != rule ||
+            summary->source.resolution == 0)
+            continue;
+        const double distance = std::abs(
+            std::log(static_cast<double>(voxelize.resolution) / static_cast<double>(summary->source.resolution)));
+        if (from == facts_.models.size() || distance < nearest) {
+            from = i;
+            nearest = distance;
+        }
+    }
+    if (from == facts_.models.size()) {
+        ImGui::TextDisabled("Size: no earlier import of %s to scale from", meshName.c_str());
+        helpMarker("After one import of this mesh (same rule), the panel estimates the size at other resolutions.");
+        return;
+    }
+
+    // The voxels lie on the surface: they grow with the square of the resolution.
+    const voxel::VoxelFileSummary& summary = *facts_.modelSummaries[from];
+    const double scale = std::pow(static_cast<double>(voxelize.resolution) / summary.source.resolution, 2.0);
+    const auto voxels = static_cast<std::uint64_t>(static_cast<double>(summary.voxels) * scale);
+    const auto fileBytes = static_cast<std::uint64_t>(static_cast<double>(summary.fileBytes) * scale);
+    std::string text = std::format("about {} voxels, file {}", formatCount(voxels), formatBytes(fileBytes));
+    std::string help = std::format("Scaled from {} (resolution {}): the voxels lie on the surface, so they grow with "
+                                   "the square of the resolution.",
+                                   utf8(facts_.models.at(from).filename()), summary.source.resolution);
+    if (facts_.voxelCount > 0 && !facts_.encodings.empty()) {
+        const double bitsPerVoxel = 8.0 * static_cast<double>(facts_.sceneBytes) / facts_.voxelCount;
+        const auto gpuBytes = static_cast<std::uint64_t>(static_cast<double>(voxels) * bitsPerVoxel / 8.0);
+        text += std::format(", GPU {}", formatBytes(gpuBytes));
+        help += std::format("\nGPU: at {:.1f} bits per voxel, the encoding on screen ({}). Another model packs a "
+                            "little differently into bricks.",
+                            bitsPerVoxel, facts_.encodingChoices.describe(facts_.encoding));
+    }
+    ImGui::TextDisabled("%s", text.c_str());
+    helpMarker(help.c_str());
 }
 
 void ControlPanel::drawEncodingSettings()

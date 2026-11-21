@@ -8,12 +8,15 @@
 #include "thesis/tracing/RayLog.h"
 
 #include "thesis/encoding/Encoding.h"
+#include "thesis/voxel/MeshImport.h"
+#include "thesis/voxel/VoxelFile.h"
 
 #include <imgui.h>
 
 #include "Letterbox.h"
 #include "RayLogText.h"
 #include "RayWorkSummary.h"
+#include "RecentFiles.h"
 #include "StructureView.h"
 #include "ViewComparison.h"
 #include "WindowCommand.h"
@@ -27,6 +30,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace thesis::app {
@@ -59,9 +63,15 @@ struct PanelFacts {
         std::string name;
         std::uint64_t bytes = 0;
     };
-    // The scenes to choose from: every voxel file of the model folder, then the box field (an empty path).
+    // The scenes to choose from: every voxel file of the model folder and the files opened since
+    // the start, then the box field (an empty path).
     std::vector<std::filesystem::path> models;
-    std::size_t model = 0; // the scene on screen, an index into `models`
+    // The header of each voxel file of `models`, same index; none for the box field and for a
+    // file whose header cannot be read. "Import mesh" estimates its result from these.
+    std::vector<std::optional<voxel::VoxelFileSummary>> modelSummaries;
+    std::size_t model = 0;                 // the scene on screen, an index into `models`
+    double loadMilliseconds = 0.0;         // reading the voxel file of the model on screen
+    std::filesystem::path importDirectory; // where "Import mesh" writes its voxel files
     std::vector<Tracer> tracers;
     std::vector<std::string> skippedTracers;       // "name: reason", for tracers that cannot handle the scene
     std::vector<Encoding> encodings;               // empty: the scene has no encodings to choose from
@@ -84,6 +94,24 @@ struct PanelFacts {
     std::uint32_t height = 0;
     std::uint32_t rayOrder = 0; // where the ray of a pixel is in the ray list: THESIS_RAY_ORDER_*
     std::uint64_t rayAndHitBytes = 0;
+};
+
+// "Import mesh" in Settings, Scene: a triangle mesh (PLY, OBJ, glTF) to voxelize into the model folder
+// (PanelFacts::importDirectory) and open.
+struct MeshImportRequest {
+    std::filesystem::path mesh;
+    voxel::VoxelizeOptions voxelize;
+    voxel::UpAxis upAxis = voxel::UpAxis::Y;
+};
+
+// The right-click menu of the model list: a voxel file leaves the list, and maybe the disk.
+struct ModelListRequest {
+    enum class Action {
+        Remove,  // out of the list; the file stays (a file of the model folder is back at the next start)
+        Recycle, // out of the list and into the Recycle Bin; the user confirmed it
+    };
+    Action action = Action::Remove;
+    std::filesystem::path file;
 };
 
 // What the user controls in the window, and the windows that show it. A dock layout places them
@@ -128,7 +156,19 @@ public:
     void resetCamera(const core::OrbitCamera& initialCamera, std::optional<std::array<float, 3>> initialPreset);
     // While the caller builds a scene: what it does, for the status bar ("Loading lucy-8192.voxels").
     // Empty: nothing is being built. While it is set, the choices of the scene wait.
-    void setLoading(std::string what) { loading_ = std::move(what); }
+    void setLoading(std::string what)
+    {
+        loading_ = std::move(what);
+        if (loading_.empty())
+            loadingProgress_ = {};
+    }
+    // While the caller builds a scene: the share done (none: unknown) and whether it can stop now.
+    void setLoadingProgress(std::optional<float> done, bool cancellable) { loadingProgress_ = {done, cancellable}; }
+    // True once after the user pressed Cancel on the work that setLoading() names.
+    [[nodiscard]] bool takeCancelRequest() { return std::exchange(cancelRequest_, false); }
+    // The list of recently opened files that the panel offers and adds to. Without this call the
+    // lists live only while the program runs.
+    void useRecentFiles(RecentFiles recent) { recent_ = std::move(recent); }
     // The frame pipeline was rebuilt for another ray order (THESIS_RAY_ORDER_*).
     void rayOrderChanged(std::uint32_t order);
     // The scene the user asked for could not be built: the choices go back to the scene on screen.
@@ -143,6 +183,26 @@ public:
     // user makes the next choice. Call setFacts() with the scene that is shown instead.
     void reportProblem(std::string message);
     std::optional<std::string> takeComparisonRequest();
+    // Asks the caller to voxelize a mesh and open the voxel file, as "Import mesh" does. Ignored
+    // while a scene is built or a measurement runs.
+    void requestImport(MeshImportRequest request);
+    // The import the user asked for, once. The caller runs it like a scene change (setLoading,
+    // then setFacts or reportProblem).
+    std::optional<MeshImportRequest> takeImportRequest() { return std::exchange(importRequest_, std::nullopt); }
+    // Asks the caller to open a voxel file from any folder; it joins the model list. Ignored while
+    // a scene is built or a measurement runs.
+    void requestOpen(std::filesystem::path voxelFile);
+    // The voxel file the user asked to open, once. The caller runs it like a scene change.
+    std::optional<std::filesystem::path> takeOpenRequest() { return std::exchange(openRequest_, std::nullopt); }
+    // Asks the caller to take a voxel file out of the model list (and to recycle it, for
+    // Action::Recycle). Ignored for the model on screen, and while a scene is built or a
+    // measurement runs. The file also leaves the list of recent files.
+    void requestModelListChange(ModelListRequest request);
+    std::optional<ModelListRequest> takeModelListRequest() { return std::exchange(modelListRequest_, std::nullopt); }
+    // The caller changed the model list without building another scene: the new list, the header
+    // of each file, and the index of the model on screen in it.
+    void setModelList(std::vector<std::filesystem::path> models,
+                      std::vector<std::optional<voxel::VoxelFileSummary>> summaries, std::size_t model);
     void showComparison(ViewComparison result);
     const std::string& tracerName() const { return facts_.tracers.at(activeTracer_).name; }
 
@@ -180,7 +240,8 @@ public:
     // True while the scene the user asked for is not the one on screen yet, or is being built.
     [[nodiscard]] bool sceneChangePending() const
     {
-        return !loading_.empty() || wantedModel_ != facts_.model || wantedEncoding_ != facts_.encoding ||
+        return !loading_.empty() || importRequest_ || openRequest_ || modelListRequest_ ||
+               wantedModel_ != facts_.model || wantedEncoding_ != facts_.encoding ||
                wantedBrickSize_ != facts_.brickSize || wantedRayOrder_ != facts_.rayOrder;
     }
 
@@ -259,6 +320,8 @@ private:
         cameraPreset_.reset();
     }
     void returnCamera(); // back to the start camera (R)
+    // Adds a file to a list of recent files; a list that cannot be saved shows as a problem.
+    void rememberFile(const std::string& kind, const std::filesystem::path& file);
     // Right button held: the mouse turns the camera in place, W/A/S/D/Q/E move it, the wheel
     // sets the speed. `cameraFree`: the camera may move (no inspected pixel holds it).
     void fly(bool cameraFree);
@@ -282,6 +345,14 @@ private:
     // ControlPanelSettings.cpp: the settings in the order a ray meets them.
     void drawSettings();
     void drawSceneSettings();
+    // The right-click menu of one file of the model list; `listed`: in the model list, not only recent.
+    void drawModelMenu(const std::filesystem::path& file, bool listed, bool locked);
+    void drawRecycleConfirm(); // the "Move to Recycle Bin?" question of drawModelMenu
+    void drawModelFacts();     // inside Scene: grid, voxels, bricks, fill, file size, load time
+    void drawImportMesh();     // inside Scene: mesh file, resolution, up axis, rule, estimate, Import button
+    void drawImportResolution();
+    void drawImportEstimate(const std::filesystem::path& mesh);
+    void drawLoadingProgress(); // progress bar and Cancel of the work on the worker thread
     void drawEncodingSettings();
     void drawRaySettings();
     void drawSearchSettings();
@@ -306,6 +377,21 @@ private:
     bool pickAfterReload_ = false;
     int compareChoice_ = 0;
     std::optional<std::string> compareRequest_;
+    // "Import mesh": the text field, the choices, and the request the caller has not taken yet.
+    std::array<char, 1024> importPath_{};
+    MeshImportRequest importChoice_;
+    bool customResolution_ = false; // the resolution is typed, not picked from the list
+    std::optional<MeshImportRequest> importRequest_;
+    std::optional<std::filesystem::path> openRequest_;
+    std::optional<ModelListRequest> modelListRequest_;
+    std::optional<std::filesystem::path> recycleCandidate_; // asked about in drawRecycleConfirm()
+    bool openRecycleConfirm_ = false;
+    RecentFiles recent_;
+    struct LoadingProgress {
+        std::optional<float> done;
+        bool cancellable = false;
+    } loadingProgress_;
+    bool cancelRequest_ = false;
     std::optional<ViewComparison> result_;
     std::uint32_t resultBrickSize_ = 0;
     bool layoutBuilt_ = false;

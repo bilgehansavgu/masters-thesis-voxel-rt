@@ -8,10 +8,9 @@
 //       to a results file that names the code version.
 
 #include "thesis/encodings/BuiltInEncodings.h"
-#include "thesis/mesh/TriangleMesh.h"
 #include "thesis/metrics/SystemInfo.h"
+#include "thesis/voxel/MeshImport.h"
 #include "thesis/voxel/VoxelFile.h"
-#include "thesis/voxel/Voxelizer.h"
 
 #include <CLI/CLI.hpp>
 #include <nlohmann/json.hpp>
@@ -60,37 +59,23 @@ void printModel(const voxel::VoxelModel& model)
     std::printf("Data:  %llu filled voxels in %llu bricks\n", count(model.voxelCount()), count(model.bricks.size()));
 }
 
-int runVoxelize(const std::filesystem::path& meshPath, std::filesystem::path output,
-                const voxel::VoxelizeOptions& options, const std::string& upAxis)
+int runVoxelize(const std::filesystem::path& meshPath, const voxel::MeshImportOptions& options)
 {
-    if (upAxis != "y" && upAxis != "z") {
-        throw std::invalid_argument("--up-axis must be y or z");
+    const voxel::MeshImportReport report = voxel::importMesh(meshPath, options);
+    const voxel::VoxelizeReport& voxelized = report.voxelize;
+    std::printf("Mesh:  %s, %llu vertices, %llu triangles (read in %.1f s)\n", report.meshName.c_str(),
+                count(report.vertices), count(report.triangles), report.readSeconds);
+    std::printf("Model: %s (rule %s)\n", report.modelName.c_str(),
+                std::string(voxel::ruleName(options.voxelize.rule)).c_str());
+    std::printf("Grid:  %u x %u x %u voxels, bricks of %u, voxel size %g\n", report.grid.size.x, report.grid.size.y,
+                report.grid.size.z, report.grid.brickSize, static_cast<double>(report.grid.voxelSize));
+    std::printf("Data:  %llu filled voxels in %llu bricks\n", count(voxelized.voxels), count(voxelized.bricks));
+    std::printf("Time:  %.2f s to sort the triangles into bricks, %.2f s to fill the bricks\n", voxelized.binSeconds,
+                voxelized.voxelizeSeconds);
+    if (voxelized.degenerateTriangles > 0) {
+        std::printf("Note:  %llu triangles have no area and were skipped\n", count(voxelized.degenerateTriangles));
     }
-    const Clock::time_point loadStart = Clock::now();
-    mesh::TriangleMesh mesh = mesh::loadPly(meshPath);
-    if (upAxis == "z") {
-        // The renderer treats +y as up. Turn the mesh a quarter turn around x: (x, y, z) -> (x, z, -y).
-        for (glm::vec3& position : mesh.positions) {
-            position = {position.x, position.z, -position.y};
-        }
-    }
-    std::printf("Mesh:  %s, %llu vertices, %llu triangles (read in %.1f s)\n", mesh.name.c_str(),
-                count(mesh.positions.size()), count(mesh.triangleCount()), secondsSince(loadStart));
-
-    voxel::VoxelizeReport report;
-    const voxel::VoxelModel model = voxel::voxelize(mesh, options, &report);
-    printModel(model);
-    std::printf("Time:  %.2f s to sort the triangles into bricks, %.2f s to fill the bricks\n", report.binSeconds,
-                report.voxelizeSeconds);
-    if (report.degenerateTriangles > 0) {
-        std::printf("Note:  %llu triangles have no area and were skipped\n", count(report.degenerateTriangles));
-    }
-
-    if (output.empty()) {
-        output = meshPath.parent_path() / (model.name + ".voxels");
-    }
-    voxel::saveVoxelModel(output, model);
-    std::printf("Wrote: %s (%.1f MiB)\n", output.string().c_str(), mebibytes(std::filesystem::file_size(output)));
+    std::printf("Wrote: %s (%.1f MiB)\n", report.output.string().c_str(), mebibytes(report.fileBytes));
     return 0;
 }
 
@@ -198,17 +183,19 @@ int main(int argc, char** argv)
     cli.require_subcommand(1);
 
     std::filesystem::path meshPath;
-    std::filesystem::path voxelOutput;
-    voxel::VoxelizeOptions voxelizeOptions;
+    voxel::MeshImportOptions importOptions;
+    voxel::VoxelizeOptions& voxelizeOptions = importOptions.voxelize;
     std::string ruleName = std::string(voxel::ruleName(voxelizeOptions.rule));
-    CLI::App* voxelize = cli.add_subcommand("voxelize", "Read a triangle mesh (PLY) and write a voxel file");
-    voxelize->add_option("--mesh", meshPath, "The PLY file")->required()->check(CLI::ExistingFile);
+    CLI::App* voxelize = cli.add_subcommand("voxelize", "Read a triangle mesh (PLY, OBJ, glTF) and write a voxel file");
+    voxelize->add_option("--mesh", meshPath, "The mesh file: .ply, .obj, .gltf or .glb")
+        ->required()
+        ->check(CLI::ExistingFile);
     voxelize->add_option("--resolution", voxelizeOptions.resolution,
                          "Voxels along the longest side of the mesh (a multiple of the brick size)");
     voxelize->add_option("--brick-size", voxelizeOptions.brickSize, "Voxels along one side of a brick: 8, 16 or 32");
     voxelize->add_option("--rule", ruleName, "Which voxels count as filled: sampled (the paper) or conservative");
-    voxelize->add_option("--output", voxelOutput, "The voxel file to write (default: next to the mesh)");
-    std::string upAxis = "y";
+    voxelize->add_option("--output", importOptions.output, "The voxel file to write (default: next to the mesh)");
+    std::string upAxis = std::string(voxel::upAxisName(importOptions.upAxis));
     voxelize->add_option("--up-axis", upAxis, "The axis of the mesh that points up: y (default) or z, as in Lucy");
 
     std::filesystem::path modelPath;
@@ -224,7 +211,8 @@ int main(int argc, char** argv)
     try {
         if (*voxelize) {
             voxelizeOptions.rule = voxel::ruleFromName(ruleName);
-            return runVoxelize(meshPath, voxelOutput, voxelizeOptions, upAxis);
+            importOptions.upAxis = voxel::upAxisFromName(upAxis);
+            return runVoxelize(meshPath, importOptions);
         }
         return runReport(modelPath, encodings, reportDirectory);
     } catch (const std::exception& error) {

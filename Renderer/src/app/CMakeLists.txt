@@ -9,6 +9,8 @@ add_executable(thesis_renderer
     ControlPanelMeasurements.cpp
     ControlPanelSettings.cpp
     ControlPanelStatusBar.cpp
+    FileDialog.cpp
+    FileDialog.h
     FramePipeline.cpp
     FramePipeline.h
     Gui.cpp
@@ -25,6 +27,8 @@ add_executable(thesis_renderer
     Presenter.h
     RayLogText.cpp
     RayLogText.h
+    RecentFiles.cpp
+    RecentFiles.h
     StructureView.cpp
     StructureView.h
     RayLesson.cpp
@@ -35,6 +39,8 @@ add_executable(thesis_renderer
     SceneSetup.h
     Screenshot.cpp
     Screenshot.h
+    ShellFiles.cpp
+    ShellFiles.h
     Window.cpp
     Window.h
     WindowCommand.cpp
@@ -55,6 +61,8 @@ target_link_libraries(thesis_renderer PRIVATE
     thesis::profiling
     glfw
     imgui::imgui
+    nfd::nfd
+    nlohmann_json::nlohmann_json
     CLI11::CLI11)
 target_include_directories(thesis_renderer SYSTEM PRIVATE ${Stb_INCLUDE_DIR})
 target_compile_definitions(thesis_renderer PRIVATE THESIS_DEFAULT_SHADER_DIR="${THESIS_SHADER_OUTPUT_DIR}")

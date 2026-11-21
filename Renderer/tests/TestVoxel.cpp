@@ -3,12 +3,14 @@
 #include "VoxelTestHelpers.h"
 
 #include "thesis/mesh/TriangleMesh.h"
+#include "thesis/voxel/MeshImport.h"
 #include "thesis/voxel/OctNormal.h"
 #include "thesis/voxel/Rebrick.h"
 #include "thesis/voxel/VoxelFile.h"
 #include "thesis/voxel/Voxelizer.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <glm/common.hpp>
 #include <glm/geometric.hpp>
 #include <glm/trigonometric.hpp>
 
@@ -17,6 +19,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <optional>
 #include <queue>
 #include <string>
@@ -282,6 +285,17 @@ TEST_CASE("voxel file returns the model that was saved", "[voxel]")
     const voxel::VoxelModel loaded = voxel::loadVoxelModel(path);
     CHECK(loaded == model); // grid, source, name and every voxel
 
+    // The header alone states the same as the whole file.
+    const voxel::VoxelFileSummary summary = voxel::readVoxelFileSummary(path);
+    CHECK(summary.name == model.name);
+    CHECK(summary.grid == model.grid);
+    CHECK(summary.source.mesh == model.source.mesh);
+    CHECK(summary.source.rule == model.source.rule);
+    CHECK(summary.source.resolution == model.source.resolution);
+    CHECK(summary.bricks == model.bricks.size());
+    CHECK(summary.voxels == model.voxelCount());
+    CHECK(summary.fileBytes == std::filesystem::file_size(path));
+
     // A file that is cut off, and a file of another kind, are refused.
     const std::uintmax_t size = std::filesystem::file_size(path);
     std::filesystem::resize_file(path, size - 100);
@@ -291,4 +305,191 @@ TEST_CASE("voxel file returns the model that was saved", "[voxel]")
         file << "this is not a voxel file";
     }
     CHECK_THROWS(voxel::loadVoxelModel(path));
+    CHECK_THROWS(voxel::readVoxelFileSummary(path));
+}
+
+// OBJ and glTF files of the same mesh give the triangles that the PLY file gives: same corners
+// in the same order, positions within the rounding of the text that holds them.
+TEST_CASE("OBJ and glTF readers give the mesh of the PLY reader", "[mesh]")
+{
+    const mesh::TriangleMesh sphere = mesh::makeSphere({1.0f, -2.0f, 0.5f}, 3.0f, 16);
+    const std::filesystem::path plyPath = testFile("formats_sphere.ply");
+    mesh::savePly(plyPath, sphere);
+
+    // OBJ: one quad (split into two triangles) and the sphere, in two groups.
+    const std::filesystem::path objPath = testFile("formats_sphere.obj");
+    {
+        std::ofstream file(objPath);
+        file << std::setprecision(9) << "# test file\no sphere\n";
+        for (const glm::vec3& p : sphere.positions)
+            file << "v " << p.x << ' ' << p.y << ' ' << p.z << '\n';
+        file << "g triangles\n";
+        for (std::size_t i = 0; i < sphere.indices.size(); i += 3) // OBJ counts vertices from 1
+            file << "f " << sphere.indices[i] + 1 << ' ' << sphere.indices[i + 1] + 1 << ' '
+                 << sphere.indices[i + 2] + 1 << '\n';
+        // A unit square after the sphere's vertices; OBJ allows negative (relative) indices.
+        file << "g quad\nv 10 0 0\nv 11 0 0\nv 11 1 0\nv 10 1 0\nf -4 -3 -2 -1\n";
+    }
+
+    // glTF: the sphere under two nodes, a parent that scales by 2 and a child that moves by
+    // (1, 2, 3). Its world position is 2 * (p + (1, 2, 3)).
+    const std::filesystem::path gltfPath = testFile("formats_sphere.gltf");
+    {
+        const std::filesystem::path binPath = testFile("formats_sphere.bin");
+        std::ofstream bin(binPath, std::ios::binary);
+        bin.write(reinterpret_cast<const char*>(sphere.positions.data()),
+                  static_cast<std::streamsize>(sphere.positions.size() * sizeof(glm::vec3)));
+        bin.write(reinterpret_cast<const char*>(sphere.indices.data()),
+                  static_cast<std::streamsize>(sphere.indices.size() * sizeof(std::uint32_t)));
+        glm::vec3 lo = sphere.positions.front();
+        glm::vec3 hi = lo;
+        for (const glm::vec3& p : sphere.positions) {
+            lo = glm::min(lo, p);
+            hi = glm::max(hi, p);
+        }
+        const std::size_t positionBytes = sphere.positions.size() * sizeof(glm::vec3);
+        const std::size_t indexBytes = sphere.indices.size() * sizeof(std::uint32_t);
+        std::ofstream file(gltfPath);
+        file << std::setprecision(9) << R"({"asset": {"version": "2.0"}, "scene": 0, "scenes": [{"nodes": [0]}],)"
+             << R"("nodes": [{"children": [1], "scale": [2, 2, 2]}, {"mesh": 0, "translation": [1, 2, 3]}],)"
+             << R"("meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1}]}],)"
+             << R"("accessors": [{"bufferView": 0, "componentType": 5126, "type": "VEC3", "count": )"
+             << sphere.positions.size() << R"(, "min": [)" << lo.x << ',' << lo.y << ',' << lo.z << R"(], "max": [)"
+             << hi.x << ',' << hi.y << ',' << hi.z << "]},"
+             << R"({"bufferView": 1, "componentType": 5125, "type": "SCALAR", "count": )" << sphere.indices.size()
+             << "}],"
+             << R"("bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": )" << positionBytes << "},"
+             << R"({"buffer": 0, "byteOffset": )" << positionBytes << R"(, "byteLength": )" << indexBytes << "}],"
+             << R"("buffers": [{"uri": "formats_sphere.bin", "byteLength": )" << positionBytes + indexBytes << "}]}";
+    }
+
+    const auto checkPositions = [](const std::vector<glm::vec3>& actual, const std::vector<glm::vec3>& expected) {
+        REQUIRE(actual.size() == expected.size());
+        for (std::size_t i = 0; i < actual.size(); ++i) {
+            INFO("vertex " << i);
+            CHECK(glm::length(actual[i] - expected[i]) <= 1e-5f * (1.0f + glm::length(expected[i])));
+        }
+    };
+
+    const mesh::TriangleMesh ply = mesh::loadMesh(plyPath);
+    CHECK(ply.indices == sphere.indices);
+    checkPositions(ply.positions, sphere.positions);
+
+    const mesh::TriangleMesh obj = mesh::loadMesh(objPath);
+    CHECK(obj.name == "formats_sphere");
+    // The sphere first, then the square as two triangles of its four corners.
+    REQUIRE(obj.triangleCount() == sphere.triangleCount() + 2);
+    CHECK(std::equal(sphere.indices.begin(), sphere.indices.end(), obj.indices.begin()));
+    const auto square = static_cast<std::uint32_t>(sphere.positions.size());
+    for (std::size_t i = sphere.indices.size(); i < obj.indices.size(); ++i)
+        CHECK((obj.indices[i] >= square && obj.indices[i] < square + 4));
+    std::vector<glm::vec3> objPositions = sphere.positions;
+    objPositions.insert(objPositions.end(), {{10, 0, 0}, {11, 0, 0}, {11, 1, 0}, {10, 1, 0}});
+    checkPositions(obj.positions, objPositions);
+
+    const mesh::TriangleMesh gltf = mesh::loadMesh(gltfPath);
+    CHECK(gltf.indices == sphere.indices);
+    std::vector<glm::vec3> placed = sphere.positions;
+    for (glm::vec3& p : placed)
+        p = 2.0f * (p + glm::vec3(1.0f, 2.0f, 3.0f));
+    checkPositions(gltf.positions, placed);
+
+    CHECK(mesh::isMeshFile("a/b/Model.GLB"));
+    CHECK_FALSE(mesh::isMeshFile("model.stl"));
+    CHECK_THROWS(mesh::loadMesh(testFile("model.stl")));
+    CHECK_THROWS(mesh::loadMesh(testFile("does_not_exist.obj")));
+    CHECK_THROWS(mesh::loadMesh(testFile("does_not_exist.gltf")));
+}
+
+// "Import mesh" in the window shows the share done and can stop the import.
+TEST_CASE("voxelizer reports its progress and stops when cancelled", "[voxel]")
+{
+    const mesh::TriangleMesh sphere = mesh::makeSphere({0.0f, 0.0f, 0.0f}, 1.0f, 32);
+    const voxel::VoxelizeOptions options{64, 16, voxel::VoxelizationRule::Sampled};
+
+    voxel::WorkMonitor monitor;
+    const voxel::VoxelModel model = voxel::voxelize(sphere, options, nullptr, &monitor);
+    CHECK(monitor.done.load() == 1.0f);
+    CHECK(model == voxel::voxelize(sphere, options)); // following the work does not change it
+
+    voxel::WorkMonitor cancelled;
+    cancelled.cancel = true;
+    CHECK_THROWS_AS(voxel::voxelize(sphere, options, nullptr, &cancelled), voxel::Cancelled);
+
+    // A cancelled import writes no file.
+    const std::filesystem::path meshFile = testFile("cancelled_sphere.ply");
+    mesh::savePly(meshFile, sphere);
+    voxel::MeshImportOptions importOptions;
+    importOptions.voxelize = options;
+    importOptions.output = testFile("cancelled_sphere.voxels");
+    std::filesystem::remove(importOptions.output);
+    CHECK_THROWS_AS(voxel::importMesh(meshFile, importOptions, {}, &cancelled), voxel::Cancelled);
+    CHECK_FALSE(std::filesystem::exists(importOptions.output));
+}
+
+TEST_CASE("PLY writer gives back the mesh it was given", "[mesh]")
+{
+    mesh::TriangleMesh tetrahedron;
+    tetrahedron.positions = kPositions;
+    tetrahedron.indices = kIndices;
+    const std::filesystem::path path = testFile("tetrahedron_written.ply");
+    mesh::savePly(path, tetrahedron);
+    const mesh::TriangleMesh loaded = mesh::loadPly(path);
+    CHECK(loaded.name == "tetrahedron_written");
+    CHECK(loaded.positions == kPositions);
+    CHECK(loaded.indices == kIndices);
+}
+
+// importMesh() is the path of thesis_model voxelize and of "Import mesh" in the window. Its file
+// must hold exactly what voxelize() makes of the turned mesh.
+TEST_CASE("mesh import writes the voxel file of the turned mesh", "[voxel]")
+{
+    // A sphere moved off the origin, so that the quarter turn changes the grid origin.
+    mesh::TriangleMesh sphere = mesh::makeSphere({1.0f, -2.0f, 0.5f}, 3.0f, 32);
+    sphere.name = "import_sphere";
+    const std::filesystem::path meshFile = testFile("import_sphere.ply");
+    mesh::savePly(meshFile, sphere);
+    const std::filesystem::path directory = testFile("imported");
+    std::filesystem::remove_all(directory);
+
+    for (const voxel::UpAxis axis : {voxel::UpAxis::Y, voxel::UpAxis::Z}) {
+        INFO("up axis " << voxel::upAxisName(axis));
+        voxel::MeshImportOptions options;
+        options.voxelize = {64, 16, voxel::VoxelizationRule::Conservative};
+        options.upAxis = axis;
+        options.directory = directory;
+        std::vector<voxel::ImportStep> steps;
+        const voxel::MeshImportReport report =
+            voxel::importMesh(meshFile, options, [&](voxel::ImportStep step) { steps.push_back(step); });
+
+        CHECK(steps ==
+              std::vector{voxel::ImportStep::ReadMesh, voxel::ImportStep::Voxelize, voxel::ImportStep::WriteFile});
+        CHECK(report.output == directory / "import_sphere-64.voxels");
+        CHECK(report.output == voxel::importTarget(meshFile, options));
+        CHECK(report.triangles == sphere.triangleCount());
+        CHECK(report.fileBytes == std::filesystem::file_size(report.output));
+
+        mesh::TriangleMesh turned = sphere;
+        if (axis == voxel::UpAxis::Z) {
+            for (glm::vec3& p : turned.positions)
+                p = {p.x, p.z, -p.y};
+        }
+        const voxel::VoxelModel expected = voxel::voxelize(turned, options.voxelize);
+        const voxel::VoxelModel loaded = voxel::loadVoxelModel(report.output);
+        CHECK(loaded == expected);
+        CHECK(report.modelName == loaded.name);
+        CHECK(report.grid == loaded.grid);
+        CHECK(report.voxelize.voxels == loaded.voxelCount());
+    }
+
+    // The file of the import replaced the first one: one file per mesh and resolution.
+    CHECK(std::distance(std::filesystem::directory_iterator(directory), std::filesystem::directory_iterator{}) == 1);
+
+    voxel::MeshImportOptions badResolution;
+    badResolution.voxelize.resolution = 70;
+    badResolution.directory = directory;
+    CHECK_THROWS(voxel::importMesh(meshFile, badResolution));
+    CHECK_THROWS(voxel::importMesh(testFile("does_not_exist.ply"), voxel::MeshImportOptions{}));
+    CHECK_THROWS(voxel::upAxisFromName("x"));
+    CHECK(voxel::upAxisFromName("z") == voxel::UpAxis::Z);
 }

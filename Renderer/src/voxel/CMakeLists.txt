@@ -1,5 +1,6 @@
 thesis_add_library(voxel
     SOURCES
+        MeshImport.cpp
         OctNormal.cpp
         Rebrick.cpp
         VoxelFile.cpp

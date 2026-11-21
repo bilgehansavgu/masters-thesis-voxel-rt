@@ -1,5 +1,6 @@
 #include "thesis/voxel/Voxelizer.h"
 
+#include "thesis/voxel/MeshImport.h"
 #include "thesis/voxel/OctNormal.h"
 
 #include <glm/common.hpp>
@@ -8,6 +9,7 @@
 #include <glm/vec3.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <execution>
@@ -183,8 +185,17 @@ VoxelizationRule ruleFromName(std::string_view name)
     throw std::invalid_argument("Unknown voxelization rule '" + std::string(name) + "' (sampled or conservative)");
 }
 
-VoxelModel voxelize(const mesh::TriangleMesh& mesh, const VoxelizeOptions& options, VoxelizeReport* report)
+VoxelModel voxelize(const mesh::TriangleMesh& mesh, const VoxelizeOptions& options, VoxelizeReport* report,
+                    WorkMonitor* monitor)
 {
+    // Sorting the triangles into bricks counts as the first tenth of the work, filling the bricks
+    // as the rest: filling takes most of the time.
+    constexpr float kBinShare = 0.1f;
+    const auto cancelled = [monitor] { return monitor != nullptr && monitor->cancel.load(std::memory_order_relaxed); };
+    const auto setDone = [monitor](float done) {
+        if (monitor != nullptr)
+            monitor->done.store(done, std::memory_order_relaxed);
+    };
     const std::uint32_t n = options.brickSize;
     if (!isSupportedBrickSize(n)) {
         throw std::invalid_argument("voxelize: brick size must be 8, 16 or 32");
@@ -212,7 +223,7 @@ VoxelModel voxelize(const mesh::TriangleMesh& mesh, const VoxelizeOptions& optio
     }
 
     VoxelModel model;
-    model.name = mesh.name + "-" + std::to_string(options.resolution);
+    model.name = voxelModelName(mesh.name, options.resolution);
     model.source = {mesh.name, mesh.triangleCount(), std::string(ruleName(options.rule)), options.resolution};
     model.grid.brickSize = n;
     model.grid.voxelSize = static_cast<float>(longest / (options.resolution - 1));
@@ -244,6 +255,11 @@ VoxelModel voxelize(const mesh::TriangleMesh& mesh, const VoxelizeOptions& optio
     entries.reserve(mesh.triangleCount() + mesh.triangleCount() / 4);
     const glm::dvec3 lastVoxel(model.grid.size - 1u);
     for (std::size_t triangle = 0; triangle < mesh.triangleCount(); ++triangle) {
+        if (triangle % 65536 == 0) {
+            if (cancelled())
+                throw Cancelled();
+            setDone(kBinShare * static_cast<float>(triangle) / static_cast<float>(mesh.triangleCount()));
+        }
         const Triangle t = loadTriangle(triangle);
         const glm::dvec3 areaNormal = glm::cross(t.b - t.a, t.c - t.a);
         if (glm::dot(areaNormal, areaNormal) == 0.0) {
@@ -282,7 +298,14 @@ VoxelModel voxelize(const mesh::TriangleMesh& mesh, const VoxelizeOptions& optio
     std::vector<VoxelBrick> filled(jobs.size());
     std::vector<std::size_t> order(jobs.size());
     std::iota(order.begin(), order.end(), std::size_t{0});
+    std::atomic<std::size_t> jobsDone{0};
     std::for_each(std::execution::par, order.begin(), order.end(), [&](std::size_t jobIndex) {
+        // A cancelled call skips the bricks left; the result is thrown away below.
+        if (cancelled())
+            return;
+        const std::size_t doneBefore = jobsDone.fetch_add(1, std::memory_order_relaxed);
+        if (doneBefore % 1024 == 0)
+            setDone(kBinShare + (1.0f - kBinShare) * static_cast<float>(doneBefore) / static_cast<float>(jobs.size()));
         thread_local Scratch scratch;
         scratch.occupancy.assign(words, 0);
         if (scratch.normalSum.size() != voxelsPerBrick(n)) {
@@ -320,6 +343,9 @@ VoxelModel voxelize(const mesh::TriangleMesh& mesh, const VoxelizeOptions& optio
             }
         }
     });
+    if (cancelled())
+        throw Cancelled();
+    setDone(1.0f);
 
     for (VoxelBrick& brick : filled) {
         if (!brick.normals.empty()) {

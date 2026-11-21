@@ -9,7 +9,7 @@ interface.
 
 ```
 OFFLINE, once per model                                   (thesis_model voxelize)
-  mesh file (PLY) → voxelizer → voxel file (.voxels)
+  mesh file (PLY, OBJ, glTF) → voxelizer → voxel file (.voxels)
 
 WHEN A MODEL IS LOADED, and again when the encoding is switched
   voxel file → (bricks of 8, 16 or 32 voxels) → [ ENCODING SOCKET ] → buffers on the GPU, one primitive per brick
@@ -127,9 +127,17 @@ solid boxes. Docked areas sit around the image (drag a tab to rearrange them):
 
 **Settings** (left), in the order a ray meets them:
 
-- *Scene*: the model, every `.voxels` file in `../Models` and the box field. A model loads in the
-  background; the status bar says so. A model that cannot be built shows why, and the window
-  keeps the scene before.
+- *Scene*: the model, every `.voxels` file in `../Models`, files opened with *Open...* (any
+  folder), recently opened files, and the box field. A model loads in the background; the status
+  bar says so. A model that cannot be built shows why, and the window keeps the scene before.
+  *Import mesh* does `thesis_model voxelize` in the window: a mesh file (`.ply`, `.obj`, `.gltf`,
+  `.glb`; typed, picked with *Browse...* or from the recent meshes), the resolution (a list, or
+  any multiple of 32), the up axis and the rule. Before the import it estimates the voxels from an
+  earlier import of the same mesh. It writes `<mesh>-<resolution>.voxels` into `../Models` (over
+  a file of that name, marked before) and opens it; *Cancel* stops it and writes nothing. Recent
+  files are kept in `%LOCALAPPDATA%/thesis_renderer/recent.json`. A right click on a model of the
+  list: *Show in Explorer*, *Remove from list* (the file stays; a file of `../Models` is back at the
+  next start) or *Move to Recycle Bin...* (asks first). The model on screen cannot be removed.
 - *Encoding*: one switch per setting of the encodings (layout, mipmap), and the brick size.
 - *Rays*: the ray order (rows or tiles) and the camera presets of the benchmark plan (standard
   x1, close x0.35, near x0.18).
@@ -222,7 +230,8 @@ the start of the window too.
 row; with `tiles` they are a tile of 8 x 4 pixels. The image is the same either way; only the
 speed can change. The rule is in `shared/include/thesis/shared/RayOrder.h`.
 `--list-tracers` and `--list-encodings` print what is built in (an encoding with its settings).
-`--self-test` uses every control of the window once, then checks "Copy as command": it renders
+`--self-test` uses every control of the window once (it imports a small sphere into
+`%TEMP%/thesis_self_test`, not into `../Models`), then checks "Copy as command": it renders
 the frame on screen again from its screenshot command and exits with code 3 if one pixel differs.
 
 ### Many runs at once

@@ -93,13 +93,23 @@ void saveVoxelModel(const std::filesystem::path& path, const VoxelModel& model)
     }
 }
 
-VoxelModel loadVoxelModel(const std::filesystem::path& path)
-{
-    const auto fail = [&](const std::string& what) {
-        throw std::runtime_error("Voxel file '" + path.string() + "': " + what);
-    };
+namespace {
 
-    std::ifstream file(path, std::ios::binary);
+[[noreturn]] void failFile(const std::filesystem::path& path, const std::string& what)
+{
+    throw std::runtime_error("Voxel file '" + path.string() + "': " + what);
+}
+
+// The header of an open voxel file; the file is left at the first byte of the data.
+struct Header {
+    VoxelFileSummary summary;
+    nlohmann::json sections;
+    std::uint64_t dataStart = 0; // the first byte after the header
+};
+
+Header readHeader(std::ifstream& file, const std::filesystem::path& path)
+{
+    const auto fail = [&](const std::string& what) { failFile(path, what); };
     if (!file) {
         fail("cannot be opened");
     }
@@ -116,39 +126,63 @@ VoxelModel loadVoxelModel(const std::filesystem::path& path)
         fail("is cut off inside the header");
     }
 
-    VoxelModel model;
-    std::uint64_t bricks = 0;
-    std::uint64_t voxels = 0;
-    nlohmann::json sections;
+    Header result;
+    VoxelFileSummary& summary = result.summary;
     try {
         const nlohmann::json header = nlohmann::json::parse(headerText);
         if (header.at("format").get<std::string>() != "thesis-voxels" || header.at("version").get<int>() != kVersion) {
             fail("has an unknown format or version");
         }
-        model.name = header.at("name").get<std::string>();
+        summary.name = header.at("name").get<std::string>();
         const nlohmann::json& grid = header.at("grid");
         const auto origin = grid.at("origin").get<std::array<float, 3>>();
         const auto size = grid.at("size").get<std::array<std::uint32_t, 3>>();
-        model.grid.origin = {origin[0], origin[1], origin[2]};
-        model.grid.voxelSize = grid.at("voxel_size").get<float>();
-        model.grid.size = {size[0], size[1], size[2]};
-        model.grid.brickSize = grid.at("brick_size").get<std::uint32_t>();
+        summary.grid.origin = {origin[0], origin[1], origin[2]};
+        summary.grid.voxelSize = grid.at("voxel_size").get<float>();
+        summary.grid.size = {size[0], size[1], size[2]};
+        summary.grid.brickSize = grid.at("brick_size").get<std::uint32_t>();
         const nlohmann::json& source = header.at("source");
-        model.source.mesh = source.at("mesh").get<std::string>();
-        model.source.triangles = source.at("triangles").get<std::uint64_t>();
-        model.source.rule = source.at("rule").get<std::string>();
-        model.source.resolution = source.at("resolution").get<std::uint32_t>();
-        bricks = header.at("bricks").get<std::uint64_t>();
-        voxels = header.at("voxels").get<std::uint64_t>();
-        sections = header.at("sections");
+        summary.source.mesh = source.at("mesh").get<std::string>();
+        summary.source.triangles = source.at("triangles").get<std::uint64_t>();
+        summary.source.rule = source.at("rule").get<std::string>();
+        summary.source.resolution = source.at("resolution").get<std::uint32_t>();
+        summary.bricks = header.at("bricks").get<std::uint64_t>();
+        summary.voxels = header.at("voxels").get<std::uint64_t>();
+        result.sections = header.at("sections");
     } catch (const nlohmann::json::exception& error) {
         fail(std::string("has a damaged header: ") + error.what());
     }
-    if (!isSupportedBrickSize(model.grid.brickSize)) {
+    if (!isSupportedBrickSize(summary.grid.brickSize)) {
         fail("has an unsupported brick size");
     }
+    result.dataStart = kMagic.size() + sizeof(std::uint64_t) + headerBytes;
+    return result;
+}
 
-    const std::uint64_t dataStart = kMagic.size() + sizeof(std::uint64_t) + headerBytes;
+} // namespace
+
+VoxelFileSummary readVoxelFileSummary(const std::filesystem::path& path)
+{
+    std::ifstream file(path, std::ios::binary);
+    VoxelFileSummary summary = readHeader(file, path).summary;
+    summary.fileBytes = std::filesystem::file_size(path);
+    return summary;
+}
+
+VoxelModel loadVoxelModel(const std::filesystem::path& path)
+{
+    const auto fail = [&](const std::string& what) { failFile(path, what); };
+
+    std::ifstream file(path, std::ios::binary);
+    const Header header = readHeader(file, path);
+    VoxelModel model;
+    model.name = header.summary.name;
+    model.grid = header.summary.grid;
+    model.source = header.summary.source;
+    const std::uint64_t bricks = header.summary.bricks;
+    const std::uint64_t voxels = header.summary.voxels;
+    const nlohmann::json& sections = header.sections;
+    const std::uint64_t dataStart = header.dataStart;
     const std::size_t wordsPerBrick = voxelsPerBrick(model.grid.brickSize) / 64;
     const auto openSection = [&](const char* name, std::uint64_t expectedBytes) {
         const auto offset = sections.at(name).at("offset").get<std::uint64_t>();

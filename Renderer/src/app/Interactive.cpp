@@ -7,24 +7,35 @@
 #include "Gui.h"
 #include "Presenter.h"
 #include "RayWorkSummary.h"
+#include "RecentFiles.h"
 #include "SceneSetup.h"
 #include "Screenshot.h"
+#include "ShellFiles.h"
 #include "Window.h"
 #include "WindowCommand.h"
 
 #include "thesis/gpu/Buffer.h"
 #include "thesis/gpu/Context.h"
 #include "thesis/gpu/Image.h"
+#include "thesis/mesh/TriangleMesh.h"
 #include "thesis/metrics/Sinks.h"
 #include "thesis/profiling/Profiling.h"
+#include "thesis/voxel/MeshImport.h"
+#include "thesis/voxel/VoxelFile.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <exception>
+#include <filesystem>
+#include <format>
 #include <functional>
 #include <future>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
+#include <system_error>
 #include <thread>
 #include <utility>
 
@@ -53,7 +64,87 @@ struct BuiltRequest {
     std::shared_ptr<SceneSource> source;
     std::size_t encoding = 0;
     BuiltScene built;
+    // The voxel file that "Import mesh" wrote or "Open..." picked for this scene. It may not be in
+    // the model list yet, so request.model means nothing until the window adds it. Empty: a
+    // scene of the model list.
+    std::filesystem::path addedFile;
+    // Seconds to read the voxel file; none if the scene reused the model already in memory.
+    std::optional<double> loadSeconds;
 };
+
+// What the worker thread does at the moment, for the status bar. The worker writes, the window reads.
+class WorkerProgress {
+public:
+    explicit WorkerProgress(std::string step) : step_(std::move(step)) {}
+    void set(std::string step)
+    {
+        const std::lock_guard lock(mutex_);
+        step_ = std::move(step);
+    }
+    [[nodiscard]] std::string step() const
+    {
+        const std::lock_guard lock(mutex_);
+        return step_;
+    }
+    [[nodiscard]] double seconds() const
+    {
+        return std::chrono::duration<double>(std::chrono::steady_clock::now() - start_).count();
+    }
+    // The share done of the step that reports one (voxelizing), and the switch to stop it.
+    voxel::WorkMonitor monitor;
+    std::atomic<bool> reportsShare{false}; // monitor.done means something now
+    std::atomic<bool> cancellable{false};  // monitor.cancel still stops the work
+
+private:
+    mutable std::mutex mutex_;
+    std::string step_;
+    std::chrono::steady_clock::time_point start_ = std::chrono::steady_clock::now();
+};
+
+std::string utf8(const std::filesystem::path& path)
+{
+    const std::u8string text = path.u8string();
+    return {text.begin(), text.end()};
+}
+
+// --self-test: a small sphere to import, written once per run.
+struct SelfTestImport {
+    std::filesystem::path mesh;
+    std::filesystem::path directory; // where its voxel file goes, outside the model folder
+    MeshImportRequest request;
+    std::string expectedFile; // the voxel file name the import must open
+
+    static SelfTestImport make()
+    {
+        SelfTestImport result;
+        result.directory = std::filesystem::temp_directory_path() / "thesis_self_test";
+        std::filesystem::create_directories(result.directory);
+        result.mesh = result.directory / "self_test_sphere.ply";
+        mesh::savePly(result.mesh, mesh::makeSphere({0.0f, 0.0f, 0.0f}, 1.0f, 64));
+        result.request = {result.mesh, {64, 32, voxel::VoxelizationRule::Sampled}, voxel::UpAxis::Z};
+        result.expectedFile = voxel::voxelModelName(result.mesh.stem().string(), 64) + ".voxels";
+        return result;
+    }
+};
+
+// The header of each voxel file of the model list. The headers only: a few small reads, also for
+// large files.
+std::vector<std::optional<voxel::VoxelFileSummary>> summariesOf(const std::vector<std::filesystem::path>& models)
+{
+    std::vector<std::optional<voxel::VoxelFileSummary>> summaries;
+    for (const std::filesystem::path& model : models) {
+        std::optional<voxel::VoxelFileSummary> summary;
+        if (!model.empty()) {
+            try {
+                summary = voxel::readVoxelFileSummary(model);
+            } catch (const std::exception&) {
+                // A file that cannot be read shows its problem when the user opens it.
+            }
+        }
+        summaries.push_back(std::move(summary));
+    }
+    return summaries;
+}
 
 // The tracer to show first: the one named on the command line, else `preferred` if it is
 // available, else the first one.
@@ -80,9 +171,10 @@ std::size_t findTracer(const std::vector<PanelFacts::Tracer>& tracers, const std
 // "Quick timing", shows each view, then goes through the encodings, the brick sizes, the tracers,
 // the encoding switches, the ray orders, the camera presets and the models. At the end it sets
 // a scene far from the defaults and asks the caller to check "Copy as command" against it.
+// Between the models and that frame it imports a small mesh and checks that the window opens it.
 class PanelTour {
 public:
-    PanelTour(const PanelFacts& facts, bool& commandCheckDue)
+    PanelTour(const PanelFacts& facts, const SelfTestImport& import, bool& commandCheckDue)
     {
         steps_.push_back([](ControlPanel& panel) { panel.measureAll(); });
         for (std::size_t mode = 0; mode < resolve::kShadingModeNames.size(); ++mode) {
@@ -130,6 +222,49 @@ public:
             steps_.push_back([next](ControlPanel& panel) { panel.selectModel(next); });
             steps_.push_back([start = facts.model](ControlPanel& panel) { panel.selectModel(start); });
         }
+        // "Import mesh", then back to the first model. The import adds a model to the list, so the
+        // first model is found by its file; a voxel file goes back through "Open...", which finds
+        // it in the list.
+        steps_.push_back([import](ControlPanel& panel) { panel.requestImport(import.request); });
+        steps_.push_back([import, startFile = facts.models.at(facts.model)](ControlPanel& panel) {
+            const PanelFacts& shown = panel.facts();
+            if (utf8(shown.models.at(shown.model).filename()) != import.expectedFile || shown.voxelCount == 0)
+                throw std::runtime_error("Import mesh did not open " + import.expectedFile);
+            std::printf("Import check: %s opened, %llu voxels.\n", import.expectedFile.c_str(),
+                        static_cast<unsigned long long>(shown.voxelCount));
+            if (startFile.empty()) {
+                panel.selectModel(shown.models.size() - 1); // the box field, always last
+            } else {
+                panel.requestOpen(startFile);
+            }
+        });
+        steps_.push_back([startFile = facts.models.at(facts.model)](ControlPanel& panel) {
+            const PanelFacts& shown = panel.facts();
+            if (shown.models.at(shown.model) != startFile)
+                throw std::runtime_error("Open did not return to " + utf8(startFile));
+        });
+        // "Remove from list" on the imported file: it leaves the list, the file stays, and the
+        // model on screen is still the one shown. (Recycle is not run: it would fill the Recycle Bin.)
+        const auto importedFile = [import](const PanelFacts& shown) {
+            const auto it = std::find_if(shown.models.begin(), shown.models.end(), [&](const auto& model) {
+                return utf8(model.filename()) == import.expectedFile;
+            });
+            return it == shown.models.end() ? std::filesystem::path{} : *it;
+        };
+        steps_.push_back([importedFile](ControlPanel& panel) {
+            const std::filesystem::path file = importedFile(panel.facts());
+            if (file.empty())
+                throw std::runtime_error("The imported file is not in the model list");
+            panel.requestModelListChange({ModelListRequest::Action::Remove, file});
+        });
+        steps_.push_back([importedFile, import, startFile = facts.models.at(facts.model)](ControlPanel& panel) {
+            const PanelFacts& shown = panel.facts();
+            if (!importedFile(shown).empty() || shown.models.at(shown.model) != startFile ||
+                shown.modelSummaries.size() != shown.models.size() ||
+                !std::filesystem::exists(import.directory / import.expectedFile))
+                throw std::runtime_error("Remove from list did not take the imported file out of the list alone");
+            std::printf("Model list check: %s removed from the list, file kept.\n", import.expectedFile.c_str());
+        });
 
         // The frame of the command check: every setting away from its default where the scene allows it.
         steps_.push_back([](ControlPanel& panel) { panel.selectRayOrder(THESIS_RAY_ORDER_TILES); });
@@ -241,23 +376,42 @@ int runInteractive(const Options& options)
         firstModel = THESIS_LUCY_MODEL;
     }
 
-    // Builds a scene on the CPU. Safe on a worker thread: it touches nothing but `source`, which
-    // the window does not use while a build runs.
-    const auto buildScene = [models, options](std::shared_ptr<SceneSource> source, SceneRequest request) {
-        const std::filesystem::path& file = models.at(request.model);
+    // Where "Import mesh" writes: the model folder. The self-test writes elsewhere.
+    std::optional<SelfTestImport> selfTestImport;
+    if (options.selfTest)
+        selfTestImport = SelfTestImport::make();
+    const std::filesystem::path importDirectory =
+        selfTestImport ? selfTestImport->directory : std::filesystem::path(THESIS_MODEL_DIR);
+    // The model list grows by the files that "Import mesh" writes: before the box field.
+    const auto addModel = [&](const std::filesystem::path& file) {
+        for (std::size_t i = 0; i + 1 < models.size(); ++i) {
+            std::error_code error;
+            if (std::filesystem::equivalent(models[i], file, error))
+                return i;
+        }
+        models.insert(models.end() - 1, std::filesystem::absolute(file).lexically_normal());
+        return models.size() - 2;
+    };
+
+    // Builds the scene of voxel file `file` (empty: the box field) on the CPU. Safe on a worker
+    // thread: it touches nothing but `source`, which the window does not use while a build runs.
+    const auto buildScene = [options](std::shared_ptr<SceneSource> source, SceneRequest request,
+                                      const std::filesystem::path& file) {
         if (file.empty()) {
             request.encoding.clear();
             request.brickSize = 0;
         }
+        BuiltRequest result;
         if (!source || source->modelFile() != file) {
             Options sceneOptions = options;
             sceneOptions.model = file;
             sceneOptions.boxExample = file.empty();
             sceneOptions.encoding = request.encoding;
             sceneOptions.brickSize = request.brickSize;
+            const auto start = std::chrono::steady_clock::now();
             source = std::make_shared<SceneSource>(sceneOptions);
+            result.loadSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
         }
-        BuiltRequest result;
         result.encoding = !source->isVoxelModel()    ? 0
                           : request.encoding.empty() ? source->initialEncoding()
                                                      : source->encodingIndex(request.encoding);
@@ -282,6 +436,7 @@ int runInteractive(const Options& options)
 
     // Uploads a built scene and prepares every tracer for it, so that switching tracers is
     // instant. Fills `facts` with what the panel shows.
+    double modelLoadSeconds = 0.0; // of the model in memory, kept while only the encoding changes
     const auto activate = [&](const BuiltRequest& loaded, PanelFacts& facts) {
         const BuiltScene& built = loaded.built;
         auto active = std::make_unique<ActiveScene>();
@@ -289,7 +444,12 @@ int runInteractive(const Options& options)
 
         facts = {};
         facts.models = models;
+        facts.modelSummaries = summariesOf(models);
         facts.model = loaded.request.model;
+        if (loaded.loadSeconds)
+            modelLoadSeconds = *loaded.loadSeconds;
+        facts.loadMilliseconds = 1e3 * modelLoadSeconds;
+        facts.importDirectory = importDirectory;
         for (const SceneSource::EncodingChoice& choice : loaded.source->encodings()) {
             facts.encodings.push_back({choice.name, choice.description, choice.skipsEmptySpace, choice.skippingTwin});
         }
@@ -376,7 +536,7 @@ int runInteractive(const Options& options)
     std::shared_ptr<SceneSource> source;
     std::unique_ptr<ActiveScene> active;
     {
-        BuiltRequest first = buildScene(nullptr, loadedRequest);
+        BuiltRequest first = buildScene(nullptr, loadedRequest, models.at(loadedRequest.model));
         loadedRequest = first.request;
         source = first.source;
         active = activate(first, facts);
@@ -391,22 +551,27 @@ int runInteractive(const Options& options)
     bool commandCheckDue = false;
     std::optional<PanelTour> tour;
     if (options.selfTest) {
-        tour.emplace(facts, commandCheckDue);
+        tour.emplace(facts, *selfTestImport, commandCheckDue);
     }
     const auto [firstCamera, firstPreset] = startCameraOf(active->gpuScene.bounds, true);
     ControlPanel panel(std::move(facts), firstCamera, firstPreset, startShading(options, firstCamera), initialTracer);
     if (options.inspect.size() == 2) {
         panel.inspectPixel(options.inspect[0], options.inspect[1]);
     }
+    // The self-test leaves the user's list of recent files alone.
+    panel.useRecentFiles(options.selfTest ? RecentFiles{} : RecentFiles(RecentFiles::defaultStorage()));
     metrics::TracySink tracySink;
     std::uint64_t frameIndex = 0;
     std::optional<std::future<BuiltRequest>> loading;
+    std::shared_ptr<WorkerProgress> progress; // of `loading`
     int exitCode = 0;
 
-    // Builds `request` on a worker thread; the window keeps running and shows `what` meanwhile.
-    const auto startLoading = [&](SceneRequest request, std::string what) {
-        panel.setLoading(std::move(what));
-        loading = std::async(std::launch::async, buildScene, source, std::move(request));
+    // Runs `job` on a worker thread; the window keeps running and shows its progress meanwhile.
+    const auto startLoading = [&](std::string what, std::function<BuiltRequest(WorkerProgress&)> job) {
+        panel.setLoading(what);
+        progress = std::make_shared<WorkerProgress>(std::move(what));
+        loading =
+            std::async(std::launch::async, [job = std::move(job), progress = progress] { return job(*progress); });
     };
 
     while (!window.shouldClose()) {
@@ -482,7 +647,7 @@ int runInteractive(const Options& options)
                 panel.reportProblem(error.what());
             }
             PanelFacts restored;
-            active = activate(buildScene(source, loadedRequest), restored);
+            active = activate(buildScene(source, loadedRequest, models.at(loadedRequest.model)), restored);
             // The model and encoding are identical, so the inspector can retain its recorded ray.
         }
 
@@ -491,21 +656,33 @@ int runInteractive(const Options& options)
         if (loading && loading->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
             std::future<BuiltRequest> done = std::move(*loading);
             loading.reset();
+            progress.reset();
             panel.setLoading({});
             std::string problem;
             try {
                 BuiltRequest built = done.get();
+                // An imported file may replace the file on screen, with other voxels: always a new model.
+                const bool imported = !built.addedFile.empty();
+                if (imported) {
+                    // The new file goes before the box field, which keeps its place at the end.
+                    const bool boxFieldShown = loadedRequest.model + 1 == models.size();
+                    built.request.model = addModel(built.addedFile);
+                    if (boxFieldShown)
+                        loadedRequest.model = models.size() - 1;
+                }
                 source = built.source;
                 active.reset();
                 PanelFacts newFacts;
                 active = activate(built, newFacts);
-                const bool otherModel = built.request.model != loadedRequest.model;
+                const bool otherModel = imported || built.request.model != loadedRequest.model;
                 loadedRequest = built.request;
                 panel.setFacts(std::move(newFacts));
                 if (otherModel) {
                     const auto [camera, preset] = startCameraOf(active->gpuScene.bounds, false);
                     panel.resetCamera(camera, preset);
                 }
+            } catch (const voxel::Cancelled&) {
+                problem = "Import cancelled. No voxel file was written.";
             } catch (const std::exception& error) {
                 problem = error.what();
             }
@@ -514,7 +691,7 @@ int runInteractive(const Options& options)
                 std::fprintf(stderr, "error: %s\n", problem.c_str());
                 if (!active) {
                     PanelFacts oldFacts;
-                    active = activate(buildScene(source, loadedRequest), oldFacts);
+                    active = activate(buildScene(source, loadedRequest, models.at(loadedRequest.model)), oldFacts);
                     panel.setFacts(std::move(oldFacts));
                 } else {
                     panel.dropSceneChange();
@@ -523,20 +700,98 @@ int runInteractive(const Options& options)
             }
         }
 
-        // The user picked another model, encoding or brick size: build it on the worker thread.
+        // The user picked another model, encoding or brick size, or a mesh to import: build it on
+        // the worker thread.
+        // The right-click menu of the model list: a file leaves the list (and maybe the disk). The
+        // scene on screen stays; only the indices behind it move.
+        if (std::optional<ModelListRequest> change = loading ? std::nullopt : panel.takeModelListRequest()) {
+            const auto it = std::find(models.begin(), models.end(), change->file);
+            const auto index = static_cast<std::size_t>(it - models.begin());
+            bool remove = it != models.end() && !it->empty() && index != loadedRequest.model;
+            if (remove && change->action == ModelListRequest::Action::Recycle) {
+                try {
+                    if (!recycleFile(change->file)) {
+                        remove = false; // the user kept the file when Windows asked
+                    }
+                } catch (const std::exception& error) {
+                    panel.reportProblem(error.what());
+                    remove = false;
+                }
+            }
+            if (remove) {
+                models.erase(it);
+                if (loadedRequest.model > index)
+                    --loadedRequest.model;
+                panel.setModelList(models, summariesOf(models), loadedRequest.model);
+            }
+        }
+
         if (!loading) {
             const PanelFacts& shown = panel.facts();
             SceneRequest wanted{panel.wantedModel(), {}, panel.wantedBrickSize()};
             if (!shown.encodings.empty())
                 wanted.encoding = shown.encodings.at(panel.wantedEncoding()).name;
-            if (wanted.model != loadedRequest.model || wanted.encoding != loadedRequest.encoding ||
-                wanted.brickSize != loadedRequest.brickSize) {
-                const std::filesystem::path& file = models.at(wanted.model);
-                startLoading(wanted,
-                             wanted.model != loadedRequest.model
-                                 ? "Loading " + (file.empty() ? std::string("box field") : file.filename().string())
-                                 : "Encoding " + shown.sceneName);
+            if (std::optional<MeshImportRequest> import = panel.takeImportRequest()) {
+                // Voxelize, write the voxel file, then build its scene with the encoding and brick
+                // size on screen. A fresh source: the file may replace the one on screen.
+                const std::string meshName = utf8(import->mesh.filename());
+                startLoading("Importing " + meshName, [buildScene, wanted, meshName, import = *import,
+                                                       directory = importDirectory](WorkerProgress& progress) {
+                    const voxel::MeshImportOptions importOptions{import.voxelize, import.upAxis, {}, directory};
+                    const std::string target = utf8(voxel::importTarget(import.mesh, importOptions).filename());
+                    // Cancel works until the file is written; reading the mesh has no share to show.
+                    progress.cancellable = true;
+                    const voxel::MeshImportReport report = voxel::importMesh(
+                        import.mesh, importOptions,
+                        [&](voxel::ImportStep step) {
+                            switch (step) {
+                            case voxel::ImportStep::ReadMesh:
+                                progress.set("Reading " + meshName);
+                                break;
+                            case voxel::ImportStep::Voxelize:
+                                progress.reportsShare = true;
+                                progress.set(std::format("Voxelizing {} at {}", meshName, import.voxelize.resolution));
+                                break;
+                            case voxel::ImportStep::WriteFile:
+                                progress.reportsShare = false;
+                                progress.cancellable = false;
+                                progress.set("Writing " + target);
+                                break;
+                            }
+                        },
+                        &progress.monitor);
+                    progress.set("Loading " + target);
+                    BuiltRequest result = buildScene(nullptr, wanted, report.output);
+                    result.addedFile = report.output;
+                    return result;
+                });
+            } else if (std::optional<std::filesystem::path> opened = panel.takeOpenRequest()) {
+                // "Open...": a voxel file from any folder, with the encoding and brick size on screen.
+                startLoading("Loading " + utf8(opened->filename()), [buildScene, wanted, opened](WorkerProgress&) {
+                    BuiltRequest result = buildScene(nullptr, wanted, *opened);
+                    result.addedFile = *opened;
+                    return result;
+                });
+            } else if (wanted.model != loadedRequest.model || wanted.encoding != loadedRequest.encoding ||
+                       wanted.brickSize != loadedRequest.brickSize) {
+                const std::filesystem::path file = models.at(wanted.model);
+                startLoading(
+                    wanted.model != loadedRequest.model
+                        ? "Loading " + (file.empty() ? std::string("box field") : utf8(file.filename()))
+                        : "Encoding " + shown.sceneName,
+                    [buildScene, source, wanted, file](WorkerProgress&) { return buildScene(source, wanted, file); });
             }
+        }
+        if (progress) {
+            if (panel.takeCancelRequest())
+                progress->monitor.cancel = true;
+            const bool share = progress->reportsShare.load();
+            const float done = progress->monitor.done.load();
+            panel.setLoading(
+                share ? std::format("{} {:.0f}% ({:.0f} s)", progress->step(), 100.0f * done, progress->seconds())
+                      : std::format("{} ({:.0f} s)", progress->step(), progress->seconds()));
+            panel.setLoadingProgress(share ? std::optional<float>(done) : std::nullopt,
+                                     progress->cancellable.load() && !progress->monitor.cancel.load());
         }
 
         // Another ray order: a new frame pipeline. The previous frame has finished, so the old one can go.

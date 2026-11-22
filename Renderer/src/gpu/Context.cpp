@@ -46,7 +46,12 @@ Context::Context(const ContextOptions& options)
         .set_engine_name("thesis")
         .require_api_version(1, 3, 0);
     if (options.validation) {
+        // Synchronization validation too: a missing barrier gives wrong results only sometimes,
+        // so a test must see it. WHY it is not enough alone: with this SDK (1.4.357) it reports
+        // hazards of copies and buffer updates, but not of the buffers a shader reads and writes
+        // through push descriptors, so a barrier that leaves out a shader stage passes unseen.
         instanceBuilder.request_validation_layers(true)
+            .add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT)
             .set_debug_callback(debugCallback)
             .set_debug_messenger_severity(VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
                                           VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT);
@@ -87,6 +92,9 @@ Context::Context(const ContextOptions& options)
     accelerationStructureFeatures.accelerationStructure = VK_TRUE;
     VkPhysicalDeviceRayQueryFeaturesKHR rayQueryFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
     rayQueryFeatures.rayQuery = VK_TRUE;
+    // The counting variant of every tracer reads the clock of the warp (core::RayWork::cycles).
+    VkPhysicalDeviceShaderClockFeaturesKHR clockFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_CLOCK_FEATURES_KHR};
+    clockFeatures.shaderSubgroupClock = VK_TRUE;
 
     // Requiring ray tracing extensions also rules out the integrated GPU of a hybrid laptop.
     vkb::PhysicalDeviceSelector selector(instance_);
@@ -96,16 +104,20 @@ Context::Context(const ContextOptions& options)
         .add_required_extension(VK_KHR_RAY_QUERY_EXTENSION_NAME)
         .add_required_extension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)
         .add_required_extension(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME)
+        .add_required_extension(VK_KHR_SHADER_CLOCK_EXTENSION_NAME)
         .set_required_features_12(features12)
         .set_required_features_13(features13)
         .add_required_extension_features(accelerationStructureFeatures)
-        .add_required_extension_features(rayQueryFeatures);
+        .add_required_extension_features(rayQueryFeatures)
+        .add_required_extension_features(clockFeatures);
     if (surface_ != VK_NULL_HANDLE) {
         selector.set_surface(surface_);
     } else {
         selector.require_present(false);
     }
-    physicalDevice_ = unwrap(selector.select(), "Selecting a GPU with hardware ray tracing");
+    physicalDevice_ =
+        unwrap(selector.select(), "Selecting a GPU with hardware ray tracing (acceleration structures, ray "
+                                  "queries) and the subgroup clock (VK_KHR_shader_clock)");
     memoryBudget_ = physicalDevice_.enable_extension_if_present(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
     // The driver's report on each compiled shader, for example how many registers one thread
     // uses. It is only read, never needed, so a driver without it is fine.
@@ -197,6 +209,8 @@ void Context::queryDeviceInfo()
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR};
     VkPhysicalDeviceVulkan12Properties properties12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES};
     properties12.pNext = &accelerationProperties;
+    VkPhysicalDeviceVulkan11Properties properties11{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES};
+    properties11.pNext = &properties12;
     // The structs of optional extensions go into the chain only when the extension is on.
     VkPhysicalDeviceRayTracingPipelinePropertiesKHR pipelineProperties{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR};
@@ -209,8 +223,9 @@ void Context::queryDeviceInfo()
         pipelineProperties.pNext = &reorderProperties;
     }
     VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
-    properties.pNext = &properties12;
+    properties.pNext = &properties11;
     vkGetPhysicalDeviceProperties2(physicalDevice(), &properties);
+    info_.subgroupSize = properties11.subgroupSize;
 
     info_.shaderGroupHandleSize = pipelineProperties.shaderGroupHandleSize;
     info_.shaderGroupHandleAlignment = pipelineProperties.shaderGroupHandleAlignment;

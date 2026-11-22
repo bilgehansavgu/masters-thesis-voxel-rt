@@ -1,6 +1,8 @@
 add_executable(thesis_renderer
     Benchmark.cpp
     Benchmark.h
+    CameraBookmarks.cpp
+    CameraBookmarks.h
     CommandLine.cpp
     CommandLine.h
     ControlPanel.cpp
@@ -33,10 +35,10 @@ add_executable(thesis_renderer
     StructureView.h
     RayLesson.cpp
     RayLesson.h
-    RayWorkSummary.cpp
-    RayWorkSummary.h
     SceneSetup.cpp
     SceneSetup.h
+    PathText.cpp
+    PathText.h
     Screenshot.cpp
     Screenshot.h
     ShellFiles.cpp

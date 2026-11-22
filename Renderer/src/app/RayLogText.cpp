@@ -1,5 +1,6 @@
 #include "RayLogText.h"
 
+#include "thesis/core/GpuTypes.h"
 #include "thesis/shared/Brick2012.h"
 #include "thesis/shared/RayLog.h"
 
@@ -47,9 +48,10 @@ RayLogLine describe(const core::RayLogEntry& step, const StructureStepText& stru
         line.text = std::format("primitive {} is the closest hit so far", step.a);
         break;
     case THESIS_LOG_RESULT:
-        line.hasT = step.a != tracing::kNoLoggedRay;
+        // `a` is the primitive of the hit, so "no hit" is core::kNoHit (not the ray log's own marker).
+        line.hasT = step.a != core::kNoHit;
         line.important = true;
-        line.text = step.a == tracing::kNoLoggedRay
+        line.text = step.a == core::kNoHit
                         ? std::string("result: no hit")
                         : std::format("result: hit on primitive {}, face {}", step.a, faceName(step.b));
         break;

@@ -4,6 +4,7 @@
 
 #include "FileDialog.h"
 #include "PanelWidgets.h"
+#include "PathText.h"
 #include "ShellFiles.h"
 
 #include "thesis/mesh/TriangleMesh.h"
@@ -29,7 +30,7 @@ using resolve::ShadingMode;
 
 std::string modelName(const std::filesystem::path& model)
 {
-    return model.empty() ? std::string("box field") : model.filename().string();
+    return model.empty() ? std::string("box field") : utf8(model.filename());
 }
 
 const char* rayOrderName(std::uint32_t order)
@@ -43,13 +44,6 @@ constexpr std::array<std::uint32_t, 7> kImportResolutions{128, 256, 512, 1024, 2
 constexpr std::uint32_t kResolutionStep = 32;
 constexpr std::uint32_t kMaxResolution = 16384;
 
-// ImGui text is UTF-8; a path of the file system may hold any character.
-std::string utf8(const std::filesystem::path& path)
-{
-    const std::u8string text = path.u8string();
-    return {text.begin(), text.end()};
-}
-
 // The path typed or pasted into a text field. Surrounding spaces and quotes go: Windows
 // "Copy as path" puts the path in quotes.
 std::filesystem::path pathFromField(std::string_view text)
@@ -59,7 +53,7 @@ std::filesystem::path pathFromField(std::string_view text)
         text.remove_prefix(1);
     while (!text.empty() && isTrimmed(text.back()))
         text.remove_suffix(1);
-    return std::filesystem::path(std::u8string(text.begin(), text.end()));
+    return pathFromUtf8(text);
 }
 
 // The kinds of file the dialogs offer.
@@ -131,7 +125,9 @@ void ControlPanel::drawSceneSettings()
     ImGui::SetNextItemWidth(-(openWidth + style.ItemSpacing.x));
     if (ImGui::BeginCombo("##model", modelName(facts_.models.at(wantedModel_)).c_str())) {
         for (std::size_t i = 0; i < facts_.models.size(); ++i) {
-            if (ImGui::Selectable(modelName(facts_.models[i]).c_str(), i == wantedModel_) && !locked)
+            // "##model<i>": two files of one name from different folders stay two items for ImGui.
+            const std::string label = modelName(facts_.models[i]) + "##model" + std::to_string(i);
+            if (ImGui::Selectable(label.c_str(), i == wantedModel_) && !locked)
                 selectModel(i);
             if (!facts_.models[i].empty()) {
                 ImGui::SetItemTooltip("%s\nRight click: show in Explorer, remove", utf8(facts_.models[i]).c_str());
@@ -536,23 +532,100 @@ void ControlPanel::drawRaySettings()
     helpMarker("Where the ray of a pixel sits in the ray list. The GPU traces 32 neighbouring rays of the list "
                "together: 32 pixels of a row, or a tile of 8 x 4 pixels. Same image, other speed.");
 
-    rowLabel("Camera");
-    for (std::size_t i = 0; i < kCameraPresets.size(); ++i) {
-        const CameraPreset& preset = kCameraPresets[i];
-        if (i > 0)
-            ImGui::SameLine();
-        if (ImGui::RadioButton(std::format("{}##camera", preset.name).c_str(), cameraPreset_ == preset.camera))
-            selectCameraPreset(i);
-        ImGui::SetItemTooltip("yaw %.0f deg, pitch %.0f deg, distance x%g", preset.camera[0], preset.camera[1],
-                              preset.camera[2]);
-    }
-    helpMarker("The cameras of the benchmark plan (--camera yaw pitch factor). The factor scales the distance "
-               "that shows the whole scene. Moving the camera leaves the preset.");
+    drawBookmarks();
     wrapped(std::format("{} x {} rays, yaw {:.1f} deg, pitch {:.1f} deg, distance {:.4g}", facts_.width, facts_.height,
                         camera_.yawDegrees, camera_.pitchDegrees, camera_.distance),
             true);
     if (ImGui::SmallButton("Reset camera (R)") && !measuring())
         returnCamera();
+}
+
+void ControlPanel::drawBookmarks()
+{
+    rowLabel("Cameras");
+    helpMarker("Kept cameras. They start as the cameras of the benchmark plan (standard, close, near); every one "
+               "can be renamed, moved to the current view or deleted. A camera is kept relative to the scene "
+               "(angles, distance factor, target offset), so it works on every model. An orbit camera (no "
+               "offset) makes the benchmark command an orbit. Kept in %LOCALAPPDATA%/thesis_renderer/cameras.json.");
+    const std::vector<CameraBookmark>& list = bookmarks_.list();
+    std::optional<std::size_t> removed;
+    if (ImGui::BeginTable("cameras", 1, ImGuiTableFlags_RowBg)) {
+        for (std::size_t i = 0; i < list.size(); ++i) {
+            const CameraBookmark& bookmark = list[i];
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::PushID(static_cast<int>(i));
+            if (renaming_ == i) {
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (std::exchange(renameFocus_, false))
+                    ImGui::SetKeyboardFocusHere();
+                if (ImGui::InputText("##rename", renameText_.data(), renameText_.size(),
+                                     ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll)) {
+                    if (renameText_[0] != '\0') {
+                        try {
+                            const std::string previous = bookmark.name;
+                            bookmarks_.rename(i, renameText_.data());
+                            if (bookmark_ == previous)
+                                bookmark_ = renameText_.data(); // the camera still stands there
+                        } catch (const std::exception& error) {
+                            problem_ = error.what();
+                        }
+                    }
+                    renaming_.reset();
+                } else if (ImGui::IsItemDeactivated()) {
+                    renaming_.reset();
+                }
+            } else {
+                if (ImGui::Selectable(bookmark.name.c_str(), bookmark_ == bookmark.name) && !measuring())
+                    selectBookmark(i);
+                ImGui::SetItemTooltip("yaw %.1f deg, pitch %.1f deg, distance x%.3g%s\nRight click: rename, move to "
+                                      "this view, delete",
+                                      bookmark.yaw, bookmark.pitch, bookmark.factor,
+                                      bookmark.preset() ? ", orbit" : ", target moved");
+                if (ImGui::BeginPopupContextItem()) {
+                    if (ImGui::MenuItem("Rename")) {
+                        renaming_ = i;
+                        renameFocus_ = true;
+                        std::snprintf(renameText_.data(), renameText_.size(), "%s", bookmark.name.c_str());
+                    }
+                    if (ImGui::MenuItem("Move to this view"))
+                        saveBookmark(bookmark.name);
+                    if (ImGui::MenuItem("Delete"))
+                        removed = i;
+                    ImGui::EndPopup();
+                }
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    if (removed)
+        removeBookmark(*removed);
+    if (list.empty())
+        ImGui::TextDisabled("No kept cameras.");
+
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float keepWidth = ImGui::CalcTextSize("Keep view").x + 2.0f * style.FramePadding.x;
+    ImGui::SetNextItemWidth(-(keepWidth + style.ItemSpacing.x));
+    const bool entered =
+        ImGui::InputTextWithHint("##bookmark name", bookmarks_.freeName().c_str(), bookmarkName_.data(),
+                                 bookmarkName_.size(), ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::SameLine();
+    if (ImGui::Button("Keep view") || entered) {
+        saveBookmark(bookmarkName_.data());
+        bookmarkName_[0] = '\0';
+    }
+    ImGui::SetItemTooltip("Keeps the current camera under this name. The same name replaces a kept camera.");
+    if (ImGui::SmallButton("Restore defaults")) {
+        try {
+            bookmarks_.restoreDefaults();
+            bookmark_.reset(); // the old names may be gone
+            renaming_.reset();
+        } catch (const std::exception& error) {
+            problem_ = error.what();
+        }
+    }
+    ImGui::SetItemTooltip("Back to the three cameras of the benchmark plan. Kept cameras of your own are deleted.");
 }
 
 void ControlPanel::drawSearchSettings()
@@ -589,6 +662,39 @@ void ControlPanel::drawSearchSettings()
         ImGui::TextColored(kProblemColor, "Not available: %s", skipped.c_str());
         ImGui::PopTextWrapPos();
     }
+    drawComparisonChoice();
+}
+
+void ControlPanel::drawComparisonChoice()
+{
+    rowLabel("A/B image");
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    const char* preview = splitTracer_ ? tracerLabel(facts_.tracers.at(*splitTracer_).name) : "off";
+    if (ImGui::BeginCombo("##split", preview)) {
+        if (ImGui::Selectable("off", !splitTracer_))
+            compareInImage(std::nullopt);
+        for (std::size_t i = 0; i < facts_.tracers.size(); ++i) {
+            if (i == activeTracer_)
+                continue;
+            const char* reason = unavailableViewFor(shading_.mode, i);
+            ImGui::BeginDisabled(reason != nullptr);
+            if (ImGui::Selectable(tracerLabel(facts_.tracers[i].name), splitTracer_ == i))
+                compareInImage(i);
+            ImGui::EndDisabled();
+            if (reason && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("%s", reason);
+        }
+        ImGui::EndCombo();
+    }
+    helpMarker("The image shows the selected tracer (A) left of a line and this tracer (B) right of it: same rays, "
+               "same view, same colour scale. Drag the line. Both tracers run in each frame, so the window keeps "
+               "no trace times while it is on.");
+    if (splitTracer_ && !splitTracer()) {
+        if (const char* reason = unavailableViewFor(shading_.mode, *splitTracer_))
+            ImGui::TextColored(kProblemColor, "B cannot show this view: %s", reason);
+        else
+            ImGui::TextDisabled("B is off while Quick timing runs.");
+    }
 }
 
 void ControlPanel::drawOutputSettings()
@@ -620,17 +726,32 @@ void ControlPanel::drawOutputSettings()
                        : current->legend);
 
     drawLight();
-    if (shading_.mode == ShadingMode::Distance) {
+    const bool ranged = shading_.mode == ShadingMode::Distance || resolve::showsCount(shading_.mode);
+    if (ranged) {
         rowLabel("Range");
+        bool automatic = autoRanges_;
+        if (ImGui::Checkbox("automatic", &automatic))
+            setAutoRanges(automatic);
+        helpMarker("On: the range follows the frame. Distance: from the nearest to the farthest visible hit, each "
+                   "time the camera stops. Counts: the end of the colour map is the 99th percentile of the rays "
+                   "with work, about once a second. Off (or any change by hand): the range stays, so the colours "
+                   "of two tracers compare.");
+    }
+    if (shading_.mode == ShadingMode::Distance) {
+        rowLabel("");
         ImGui::SetNextItemWidth(-FLT_MIN);
-        ImGui::DragFloatRange2("##distance", &shading_.distanceNear, &shading_.distanceFar, 0.1f, 0.0f, 1000.0f,
-                               "near %.1f", "far %.1f");
+        const float speed = std::max(0.001f, 0.002f * (shading_.distanceFar - shading_.distanceNear));
+        if (ImGui::DragFloatRange2("##distance", &shading_.distanceNear, &shading_.distanceFar, speed, 0.0f, 1e7f,
+                                   "near %.4g", "far %.4g"))
+            autoRanges_ = false;
     }
     if (resolve::showsCount(shading_.mode)) {
         resolve::ColorScale& scale = shading_.workScale;
         rowLabel("Scale max");
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5.0f);
-        ImGui::DragFloat("##scale max", &scale.maximum, 1.0f, 1.0f, 4096.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+        const float speed = std::max(1.0f, 0.005f * scale.maximum);
+        if (ImGui::DragFloat("##scale max", &scale.maximum, speed, 1.0f, 1e9f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
+            autoRanges_ = false;
         ImGui::SetItemTooltip("The count at the end of the colour map. A larger count is white.");
         ImGui::SameLine();
         if (ImGui::RadioButton("linear", scale.kind == resolve::ScaleKind::Linear))
@@ -641,6 +762,25 @@ void ControlPanel::drawOutputSettings()
         helpMarker("Viridis colour map: equal steps of the count look like equal steps of colour, lightness rises "
                    "with the count. log2: position on the map is log2(count) / log2(maximum). The bar is on the "
                    "image.");
+        rowLabel("Per warp");
+        const bool warps = imageWarps();
+        bool warpMaximum = warps && shading_.warpSize > 0; // as the image shows it (shading())
+        ImGui::BeginDisabled(!warps);
+        if (ImGui::Checkbox("largest in the warp", &warpMaximum))
+            showWarpMaximum(warpMaximum);
+        ImGui::EndDisabled();
+        helpMarker(warps ? std::format("A warp is {} GPU threads that run the same instruction together. Here one "
+                                       "warp traces {} neighbouring rays of the ray list (Rays, Ray order), and it is "
+                                       "busy until its slowest ray is done. On: each pixel shows the largest count of "
+                                       "its warp, the work the GPU pays for. Measurements, Work per ray, Warp use: "
+                                       "the share of that work the rays really needed.",
+                                       facts_.warpSize, facts_.warpSize)
+                               .c_str()
+                   : activeTracerWarps()
+                       ? "The B tracer of the A/B image is a ray tracing pipeline, whose warps are not known. "
+                         "Both sides share one legend, so both show the count of each ray."
+                       : "This tracer is a ray tracing pipeline: the driver decides which rays share a warp, and "
+                         "reordering moves them. The warp of a ray is not known.");
     }
     if (resolve::showsWork(shading_.mode))
         ImGui::TextDisabled("Counting shader: its frames give no trace time.");
@@ -750,9 +890,12 @@ void ControlPanel::drawKeys()
         {"S", "search structure"},
         {"Esc", "let the ray go"},
         {"Tab, E, B", "next tracer, encoding, brick size (Shift: previous)"},
-        {"1-9, 0, -, =", "views"},
+        {"1-9, 0, -, =, C", "views (C: GPU clock cycles)"},
         {"M", "quick timing"},
         {"R", "reset camera"},
+        {"F", "image only: fold every window, or open them all"},
+        {"P", "save the image (PNG, legend, command)"},
+        {"Drag the A/B line", "move the line of the A/B image"},
     };
     if (ImGui::BeginTable("keys", 2, ImGuiTableFlags_RowBg)) {
         ImGui::TableSetupColumn("key", ImGuiTableColumnFlags_WidthFixed);

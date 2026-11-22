@@ -321,7 +321,9 @@ TEST_CASE("the counting variant finds the same hits and counts the work", "[gpu]
     const std::uint64_t validationBefore = gpu::validationMessageCount();
     const encoding::EncodingRegistry encodings = makeEncodings();
     const workloads::CameraRays cameraRays(context, THESIS_DEFAULT_SHADER_DIR);
-    const tracing::RayBatch batch = tracing::RayBatch::create(context, 128, 96);
+    // WHY this many rays: with few, a clock that differs between SMs (ITracer::countsCycles)
+    // does not show in the cycles.
+    const tracing::RayBatch batch = tracing::RayBatch::create(context, 512, 384);
 
     const voxel::VoxelModel model = voxel::voxelize(mesh::makeSphere({0.0f, 0.0f, 0.0f}, 1.0f, 48),
                                                     {64, 16, voxel::VoxelizationRule::Conservative});
@@ -380,6 +382,15 @@ TEST_CASE("the counting variant finds the same hits and counts the work", "[gpu]
                 }
             }
             CHECK(wrong == 0);
+            // A ray of this small scene takes far less than kMostCycles (about half a second at
+            // 2 GHz). A count above it is a clock difference that went below zero and wrapped.
+            if (set.tracers[t]->countsCycles()) {
+                constexpr std::uint32_t kMostCycles = 1u << 30;
+                std::size_t wrapped = 0;
+                for (const core::RayWork& ray : work)
+                    wrapped += ray.cycles >= kMostCycles ? 1 : 0;
+                CHECK(wrapped == 0);
+            }
             // The conservative sphere has columns with one voxel and columns with a run.
             CHECK(cellKinds[THESIS_HIT_CELL_HEIGHT] > 0);
             CHECK(cellKinds[THESIS_HIT_CELL_ONE_RUN] > 0);

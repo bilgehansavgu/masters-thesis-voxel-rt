@@ -138,16 +138,17 @@ core::OrbitCamera startCamera(const Options& options, const core::Bounds& bounds
     return camera;
 }
 
-resolve::ShadingParams startShading(const Options& options, const core::OrbitCamera& camera)
+resolve::ShadingParams startShading(const Options& options, const core::OrbitCamera& camera, std::uint32_t warpSize)
 {
     resolve::ShadingParams shading;
+    shading.warpSize = options.warpMaximum ? warpSize : 0u;
     shading.mode = static_cast<resolve::ShadingMode>(options.view - 1);
     shading.distanceFar = 2.0f * camera.distance;
     if (options.distanceRange.size() == 2) {
         shading.distanceNear = options.distanceRange[0];
         shading.distanceFar = options.distanceRange[1];
     }
-    shading.workScale.maximum = options.scaleMaximum;
+    shading.workScale.maximum = options.scaleMaximum.value_or(resolve::defaultScaleMaximum(shading.mode));
     shading.workScale.kind = options.logScale ? resolve::ScaleKind::Log2 : resolve::ScaleKind::Linear;
     if (options.light.size() == 2) {
         shading.light.azimuth = glm::radians(options.light[0]);

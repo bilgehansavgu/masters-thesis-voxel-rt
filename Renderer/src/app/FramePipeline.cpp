@@ -33,11 +33,11 @@ void FramePipeline::freezeRays(const core::CameraFrame& camera, std::span<const 
         if (reference.size() != batch_.rays.size())
             throw std::invalid_argument("Fixed ray buffer size differs from frame size");
         batch_.rays = gpu::uploadBuffer(context_, reference, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-        context_.submitAndWait([](VkCommandBuffer cmd) {
+        context_.submitAndWait([this](VkCommandBuffer cmd) {
             VkMemoryBarrier2 ready{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
             ready.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
             ready.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            ready.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            ready.dstStageMask = context_.storageShaderStages();
             ready.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
             VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
             dependency.memoryBarrierCount = 1;
@@ -66,7 +66,7 @@ void FramePipeline::trace(VkCommandBuffer cmd, tracing::ITracer& tracer, const c
         THESIS_GPU_SCOPE(timer_, context_.tracy(), cmd, kStageRayGeneration);
         cameraRays_.generate(cmd, camera, batch_);
     }
-    gpu::computeToComputeBarrier(cmd);
+    gpu::shaderToShaderBarrier(context_, cmd);
     {
         // Named after the tracer, so a capture shows which search ran: "trace: Sparse octree".
         const std::string name =
@@ -79,7 +79,7 @@ void FramePipeline::trace(VkCommandBuffer cmd, tracing::ITracer& tracer, const c
             tracer.trace(cmd, batch_);
         }
     }
-    gpu::computeToComputeBarrier(cmd);
+    gpu::shaderToShaderBarrier(context_, cmd);
     if (logWritten_) {
         log_->copyBack(cmd);
     }

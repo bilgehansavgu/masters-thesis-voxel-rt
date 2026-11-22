@@ -42,6 +42,10 @@ struct RayWork {
     std::uint32_t mipmapCells;
     std::uint32_t mipmapSkips;   // of those, the cells whose square the ray passed by, so the walk skipped it
     std::uint32_t skippedLevels; // bit L is set if the walk skipped a square of level L (2^L x 2^L cells)
+    // GPU clock cycles of the ray, read with the clock of its warp: a ray that finishes early
+    // waits for the slowest ray of its warp. Measured in the counting variant, so for looking only.
+    std::uint32_t cycles;
+    std::uint32_t clockStart; // the clock at the start of the ray; only the shaders use it
 };
 
 // One step of the ray log, or its header (entry 0). The meaning of the fields depends on `kind`:
@@ -72,7 +76,7 @@ struct Aabb {
 static_assert(sizeof(Ray) == 32);
 static_assert(offsetof(Ray, tMin) == 12 && offsetof(Ray, direction) == 16 && offsetof(Ray, tMax) == 28);
 static_assert(sizeof(Hit) == 16);
-static_assert(sizeof(RayWork) == 32);
+static_assert(sizeof(RayWork) == 40);
 static_assert(sizeof(RayLogEntry) == 32);
 static_assert(sizeof(Aabb) == 32);
 static_assert(offsetof(Aabb, hi) == 12 && offsetof(Aabb, pad0) == 24);

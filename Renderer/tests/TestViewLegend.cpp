@@ -1,7 +1,9 @@
 // The legend of each view, and the strip that --screenshot puts below the image. No GPU.
 
 #include "thesis/resolve/LegendImage.h"
+#include "thesis/resolve/LegendPainter.h"
 #include "thesis/resolve/ViewLegend.h"
+#include "thesis/resolve/ViewSupport.h"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -134,5 +136,67 @@ TEST_CASE("legend strip goes below the image with the colours of the legend", "[
         if (legend.bar) {
             CHECK(stripHasColor(result, image.height, legend.bar->ramp[legend.bar->ramp.size() / 2]));
         }
+    }
+}
+
+// A painter that only records where text goes: 16 px font, 8 px for each character.
+class TextRecorder final : public resolve::ILegendPainter {
+public:
+    std::vector<float> textLeft;
+    float fontSize() const override { return 16.0f; }
+    float textWidth(const std::string& text) const override { return 8.0f * static_cast<float>(text.size()); }
+    void fillVertical(float, float, float, float, resolve::DisplayColor, resolve::DisplayColor) override {}
+    void fillHorizontal(float, float, float, float, resolve::DisplayColor, resolve::DisplayColor) override {}
+    void outline(float, float, float, float, resolve::DisplayColor) override {}
+    void text(float x, float, const std::string&, resolve::DisplayColor) override { textLeft.push_back(x); }
+};
+
+// A docked image can leave the legend a column narrower than its end boxes and tick labels.
+TEST_CASE("a legend in a narrow column keeps its strip and labels in order", "[resolve]")
+{
+    resolve::ShadingParams params = paramsFor(ShadingMode::WorkCycles);
+    params.workScale.maximum = 20000.0f;
+    const resolve::ViewLegend legend = resolve::legendFor(params);
+    for (const float width : {400.0f, 60.0f, 8.0f, 0.0f}) {
+        INFO("column " << width << " px");
+        TextRecorder painter;
+        const resolve::LegendLayout layout = resolve::paintLegend(painter, legend, 100.0f, 0.0f, width);
+        REQUIRE(layout.hasRamp);
+        CHECK(layout.rampRight >= layout.rampLeft);
+        CHECK(layout.height > 0.0f);
+    }
+}
+
+// The window and --screenshot refuse the same views (resolve::unavailableView).
+TEST_CASE("a view is refused when the tracer or the scene lacks what it needs", "[resolve]")
+{
+    const resolve::ViewSupport all{true, true, true, true, true};
+    for (std::size_t i = 0; i < resolve::kShadingModeNames.size(); ++i) {
+        const auto mode = static_cast<ShadingMode>(i);
+        INFO(resolve::kShadingModeNames[i]);
+        CHECK(resolve::unavailableView(mode, all) == nullptr);
+
+        resolve::ViewSupport noWork = all;
+        noWork.countsWork = false;
+        CHECK((resolve::unavailableView(mode, noWork) != nullptr) == resolve::showsWork(mode));
+
+        resolve::ViewSupport noCycles = all;
+        noCycles.countsCycles = false;
+        CHECK((resolve::unavailableView(mode, noCycles) != nullptr) == (mode == ShadingMode::WorkCycles));
+
+        resolve::ViewSupport noSteps = all;
+        noSteps.countsStructureSteps = false;
+        CHECK((resolve::unavailableView(mode, noSteps) != nullptr) == (mode == ShadingMode::WorkStructure));
+
+        resolve::ViewSupport boxField = all;
+        boxField.voxelModel = false;
+        CHECK((resolve::unavailableView(mode, boxField) != nullptr) ==
+              (mode == ShadingMode::Normal || mode == ShadingMode::Faces || mode == ShadingMode::WorkCells ||
+               mode == ShadingMode::WorkRuns || mode == ShadingMode::WorkHitCell));
+
+        resolve::ViewSupport noMipmap = all;
+        noMipmap.skipsEmptySpace = false;
+        CHECK((resolve::unavailableView(mode, noMipmap) != nullptr) ==
+              (mode == ShadingMode::WorkMipmap || mode == ShadingMode::WorkSkipLevel));
     }
 }

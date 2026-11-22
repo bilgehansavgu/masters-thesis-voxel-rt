@@ -38,6 +38,11 @@ constexpr ViewInfo kWorkViews[] = {
     {ShadingMode::WorkSkipLevel, ImGuiKey_Equal, "=", "Largest mipmap square skipped",
      "The largest square of the min/max mipmap that the walk skipped for this ray, because the ray passes above or "
      "below every voxel in it. The legend on the image names the colours."},
+    {ShadingMode::WorkCycles, ImGuiKey_C, "C", "GPU clock cycles",
+     "Cycles from the start to the end of the ray, read with the clock of its warp. A ray that finishes early waits "
+     "for the slowest ray of its warp, so this is the cost the GPU pays for it. Ray queries have it too; a ray "
+     "tracing pipeline does not: after TraceRay the GPU may run the ray on another SM, whose clock differs. "
+     "Measured in the counting shader: for looking, never a thesis number."},
 };
 
 static_assert(std::size(kImageViews) + std::size(kWorkViews) == resolve::kShadingModeNames.size());

@@ -401,6 +401,36 @@ TEST_CASE("OBJ and glTF readers give the mesh of the PLY reader", "[mesh]")
     CHECK_THROWS(mesh::loadMesh(testFile("does_not_exist.gltf")));
 }
 
+// A node that mirrors its mesh (scale -1 along x) must keep the front of each triangle in front:
+// the triangle (0,0,0) (1,0,0) (0,1,0) faces +z, and its mirror image faces +z too.
+TEST_CASE("glTF reader keeps the front of a mirrored mesh", "[mesh]")
+{
+    const std::vector<glm::vec3> positions{{0, 0, 0}, {1, 0, 0}, {0, 1, 0}};
+    const std::filesystem::path binPath = testFile("mirrored_triangle.bin");
+    {
+        std::ofstream bin(binPath, std::ios::binary);
+        bin.write(reinterpret_cast<const char*>(positions.data()),
+                  static_cast<std::streamsize>(positions.size() * sizeof(glm::vec3)));
+    }
+    const std::filesystem::path gltfPath = testFile("mirrored_triangle.gltf");
+    {
+        std::ofstream file(gltfPath);
+        file << R"({"asset": {"version": "2.0"}, "scene": 0, "scenes": [{"nodes": [0]}],)"
+             << R"("nodes": [{"mesh": 0, "scale": [-1, 1, 1]}],)"
+             << R"("meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],)"
+             << R"("accessors": [{"bufferView": 0, "componentType": 5126, "type": "VEC3", "count": 3,)"
+             << R"( "min": [0, 0, 0], "max": [1, 1, 0]}],)"
+             << R"("bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 36}],)"
+             << R"("buffers": [{"uri": "mirrored_triangle.bin", "byteLength": 36}]})";
+    }
+    const mesh::TriangleMesh mirrored = mesh::loadMesh(gltfPath);
+    REQUIRE(mirrored.triangleCount() == 1);
+    const glm::vec3 a = mirrored.positions.at(mirrored.indices[0]);
+    const glm::vec3 b = mirrored.positions.at(mirrored.indices[1]);
+    const glm::vec3 c = mirrored.positions.at(mirrored.indices[2]);
+    CHECK(glm::cross(b - a, c - a).z > 0.0f);
+}
+
 // "Import mesh" in the window shows the share done and can stop the import.
 TEST_CASE("voxelizer reports its progress and stops when cancelled", "[voxel]")
 {

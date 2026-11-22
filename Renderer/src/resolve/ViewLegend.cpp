@@ -45,7 +45,10 @@ ViewLegend countLegend(const ShadingParams& params)
     bar.above = Swatch{kAboveScaleColor, scale.aboveLabel(), std::nullopt};
     bar.countScale = scale;
     bar.isCount = true;
-    return {std::string(countedQuantity(params.mode)) + " (" + scale.kindName() + " scale)", bar, {}, {}};
+    std::string title = countedQuantity(params.mode);
+    if (params.warpSize > 0)
+        title += ", largest in the warp of " + std::to_string(params.warpSize) + " rays";
+    return {title + " (" + scale.kindName() + " scale)", bar, {}, {}};
 }
 
 // Same formula as mode 1 of shade.slang: grey 1 - d, with d = (t - near) / (far - near) in [0, 1].

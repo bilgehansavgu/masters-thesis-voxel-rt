@@ -8,14 +8,15 @@
 #include "thesis/tracing/RayLog.h"
 
 #include "thesis/encoding/Encoding.h"
+#include "thesis/metrics/RayWorkSummary.h"
 #include "thesis/voxel/MeshImport.h"
 #include "thesis/voxel/VoxelFile.h"
 
 #include <imgui.h>
 
+#include "CameraBookmarks.h"
 #include "Letterbox.h"
 #include "RayLogText.h"
-#include "RayWorkSummary.h"
 #include "RecentFiles.h"
 #include "StructureView.h"
 #include "ViewComparison.h"
@@ -35,6 +36,9 @@
 
 namespace thesis::app {
 
+using metrics::RayWorkSummary;
+using metrics::WorkCounter;
+
 // Facts the panel shows. They change only when the scene is rebuilt (another encoding or
 // another brick size).
 struct PanelFacts {
@@ -50,8 +54,10 @@ struct PanelFacts {
         bool countsWork = false;
         bool findsHits = true; // false: a baseline (the null tracer); its time is the floor
         bool countsStructureSteps = false;
+        bool countsCycles = false;      // tracing::ITracer::countsCycles
         DiagramFactory diagram;         // the search structure for the Explore tab; empty or null: none
         StructureStepText describeStep; // a ray log step through the search structure in words
+        bool warpsFollowRays = true;    // ray i runs on thread i (tracing::ITracer::warpsFollowRayList)
     };
     struct Encoding {
         std::string name;
@@ -94,7 +100,36 @@ struct PanelFacts {
     std::uint32_t height = 0;
     std::uint32_t rayOrder = 0; // where the ray of a pixel is in the ray list: THESIS_RAY_ORDER_*
     std::uint64_t rayAndHitBytes = 0;
+    std::uint32_t warpSize = 32; // threads the GPU runs together (gpu::DeviceInfo::subgroupSize)
 };
+
+// "Save image": where the frame goes, and the command that renders it again (into a .txt file
+// next to it). With `second`, the A/B comparison is on and its right image goes there too.
+struct SaveImageRequest {
+    std::filesystem::path file;
+    std::optional<std::filesystem::path> second;
+    std::string command;
+
+    // The file the command goes to: the image's name with .txt.
+    [[nodiscard]] std::filesystem::path commandFile() const
+    {
+        std::filesystem::path text = file;
+        text.replace_extension(".txt");
+        return text;
+    }
+    // Every file the save writes: the image, the command and, with A/B on, the B image.
+    [[nodiscard]] std::vector<std::filesystem::path> files() const
+    {
+        std::vector<std::filesystem::path> result{file, commandFile()};
+        if (second)
+            result.push_back(*second);
+        return result;
+    }
+};
+
+// The windows around the image that can fold away, to give the image the room.
+enum class PanelWindow : std::size_t { Settings, Inspector, Measurements };
+inline constexpr std::size_t kPanelWindows = 3;
 
 // "Import mesh" in Settings, Scene: a triangle mesh (PLY, OBJ, glTF) to voxelize into the model folder
 // (PanelFacts::importDirectory) and open.
@@ -152,6 +187,10 @@ public:
 
     // New facts after the scene was rebuilt. The active tracer is kept if it still exists.
     void setFacts(PanelFacts facts);
+    // New facts of the same scene, built again (after Compare view freed it on the GPU). The
+    // tracers are new objects, so their hooks (diagram, describeStep) must come from `facts`; the
+    // inspected ray, the times and the views stay. Falls back to setFacts() if the tracers differ.
+    void sceneRebuilt(PanelFacts facts);
     // A new start camera, after another model was opened. The camera goes there.
     void resetCamera(const core::OrbitCamera& initialCamera, std::optional<std::array<float, 3>> initialPreset);
     // While the caller builds a scene: what it does, for the status bar ("Loading lucy-8192.voxels").
@@ -169,6 +208,15 @@ public:
     // The list of recently opened files that the panel offers and adds to. Without this call the
     // lists live only while the program runs.
     void useRecentFiles(RecentFiles recent) { recent_ = std::move(recent); }
+    // The camera bookmarks that the panel offers and changes. Without this call they are the
+    // defaults and live only while the program runs. A storage file that could not be read shows
+    // as a problem.
+    void useCameraBookmarks(CameraBookmarks bookmarks)
+    {
+        if (!bookmarks.problem().empty())
+            problem_ = bookmarks.problem();
+        bookmarks_ = std::move(bookmarks);
+    }
     // The frame pipeline was rebuilt for another ray order (THESIS_RAY_ORDER_*).
     void rayOrderChanged(std::uint32_t order);
     // The scene the user asked for could not be built: the choices go back to the scene on screen.
@@ -215,11 +263,54 @@ public:
     // Sets one encoding switch (EncodingChoices::Switch) to one of its values.
     void selectEncodingSetting(const std::string& setting, const std::string& value);
     void selectRayOrder(std::uint32_t order);
-    // Moves the camera to kCameraPresets[index].
-    void selectCameraPreset(std::size_t index);
+    // Moves the camera to bookmark `index` of the camera bookmarks.
+    void selectBookmark(std::size_t index);
+    // Keeps the current camera as a bookmark named `name` (an empty name: "view N"). A bookmark of
+    // that name is replaced.
+    void saveBookmark(std::string name);
+    void removeBookmark(std::size_t index);
+    [[nodiscard]] const CameraBookmarks& bookmarks() const { return bookmarks_; }
     // Puts the command that reproduces the frame on screen on the clipboard.
     void copyCommand(CommandForm form);
     void selectView(resolve::ShadingMode mode);
+    // Count views: each pixel shows the largest count of its warp. Ignored for a tracer whose
+    // warps do not follow the ray list.
+    void showWarpMaximum(bool on);
+    // The ranges of the views follow the frame: the count at the end of the colour map is the
+    // 99th percentile of the rays with work, the distance range spans the visible hits. Off: the
+    // ranges stay as they are, so the colours of two tracers compare.
+    void setAutoRanges(bool on);
+    // The A/B comparison: the image shows the active tracer left of a line and tracer `index`
+    // right of it, in the same view. None: off.
+    void compareInImage(std::optional<std::size_t> index);
+    // The tracer of the right part of the image, while the comparison can show the view; else none.
+    [[nodiscard]] std::optional<std::size_t> splitTracer() const;
+    [[nodiscard]] float splitAt() const { return splitAt_; }
+    // The shading of `tracer`'s frame: the view of the panel, without the warp maximum unless
+    // every tracer in the image (both sides of the A/B image) has warps that follow the ray list.
+    [[nodiscard]] resolve::ShadingParams shadingFor(std::size_t tracer) const;
+    // True if every tracer in the image runs ray i on thread i, so the image can show warps.
+    [[nodiscard]] bool imageWarps() const;
+    // True when the frame of `tracer` must run its counting variant (a work view is on).
+    [[nodiscard]] bool countWorkFor(std::size_t tracer) const;
+    // True if the active tracer runs ray i on thread i, so its rays group into warps.
+    [[nodiscard]] bool activeTracerWarps() const;
+    // "Save image": the frame on screen goes to `file`; none: into the folder of the last image,
+    // with a name made of the scene, the tracer and the view.
+    void saveImage(std::optional<std::filesystem::path> file = std::nullopt);
+    // The image the user asked to save, once. The caller writes it and calls imageSaved().
+    std::optional<SaveImageRequest> takeSaveImageRequest() { return std::exchange(saveRequest_, std::nullopt); }
+    void imageSaved(const std::filesystem::path& file);
+    // Folds a window away (the image gets its room) or opens it again.
+    void fold(PanelWindow window, bool folded);
+    [[nodiscard]] bool folded(PanelWindow window) const { return folded_.at(static_cast<std::size_t>(window)); }
+    // Folds every window away, or opens them all if all are folded (key F).
+    void toggleImageOnly();
+    // Opens the ray inspector on the ray with the largest count of `counter` in the frame.
+    // False if there is no work summary of the camera of now, so no ray to open.
+    bool inspectCostliest(WorkCounter counter);
+    // True if the work summary belongs to the camera of now, so its costliest ray can be opened.
+    [[nodiscard]] bool costliestIsCurrent() const;
     void measureAll();
     // The window is in front (focused, not minimised). Timings are taken only then: the GPU clock
     // and the scheduling of a background window differ, so its times are not comparable.
@@ -259,6 +350,8 @@ public:
     {
         return (resolve::showsWork(shading_.mode) || (inspectedPixel_ && !lesson_)) && !measuring();
     }
+    // The shading of the active tracer's frame.
+    [[nodiscard]] resolve::ShadingParams shading() const { return shadingFor(activeTracer_); }
     // The ray whose steps the ray log of this frame must hold.
     [[nodiscard]] std::optional<std::uint32_t> loggedRay() const;
     // The ray log of the frame that was drawn last (from FramePipeline::rayLog()).
@@ -272,7 +365,8 @@ public:
     // drawn last (its camera has not moved since). The caller reads the hits and calls recordDepth().
     [[nodiscard]] bool wantsDepth() const;
     void recordDepth(DepthMap depth);
-    [[nodiscard]] const resolve::ShadingParams& shading() const { return shading_; }
+    // True if the depth belongs to the camera of now (for --self-test).
+    [[nodiscard]] bool depthIsCurrent() const { return depthVersion_ == cameraVersion_ && !depth_.distance.empty(); }
     // Where the image goes: the middle of the dock layout, in window pixels (Presenter::present).
     [[nodiscard]] PixelRect imageArea() const;
 
@@ -311,6 +405,7 @@ private:
         std::size_t tracer = 0;
         std::uint64_t cameraVersion = 0;
         bool countedWork = false;
+        bool split = false; // a second tracer ran in the same frame: its time is not one tracer's
     };
 
     // Every move of the camera goes through here: it is no longer at a preset.
@@ -318,6 +413,7 @@ private:
     {
         ++cameraVersion_;
         cameraPreset_.reset();
+        bookmark_.reset();
     }
     void returnCamera(); // back to the start camera (R)
     // Adds a file to a list of recent files; a list that cannot be saved shows as a problem.
@@ -360,6 +456,13 @@ private:
     void drawLight();       // light sliders for the lit views
     void drawLightSphere(); // the light on a sphere seen from the camera; click to place the light
     void drawKeys();
+    void drawBookmarks();          // inside Rays: the camera bookmarks
+    void drawComparisonChoice();   // inside Search: the tracer of the A/B comparison
+    void drawImageToolbar();       // on the image: fold the windows, save the image
+    void drawSplitOverlay() const; // on the image: the A/B line and the names of both tracers
+    void drawHistogram(WorkCounter counter);
+    // False for a counter that the active tracer does not count (structure steps, cycles).
+    [[nodiscard]] bool activeTracerCounts(WorkCounter counter) const;
     // ControlPanelInspector.cpp: the picked pixel, its ray walk and its ray log.
     void drawInspector();
     void drawRayWalk();
@@ -374,6 +477,32 @@ private:
     // ControlPanelStatusBar.cpp: one line under everything.
     void drawStatusBar();
 
+    // A view that cannot be shown for tracer `tracer`, with the reason; nullptr if it can.
+    [[nodiscard]] const char* unavailableViewFor(resolve::ShadingMode mode, std::size_t tracer) const;
+    // The counter that a count view shows; none for the other views.
+    [[nodiscard]] static std::optional<WorkCounter> counterOf(resolve::ShadingMode mode);
+    // Remembers the view's colour scale and takes the one of `mode` (each count view keeps its own).
+    void switchScale(resolve::ShadingMode mode);
+    void tellUser(std::string message); // one line in the status bar for a few seconds
+
+    CameraBookmarks bookmarks_;
+    std::optional<std::string> bookmark_; // the bookmark the camera stands at, until it moves
+    std::array<char, 64> bookmarkName_{};
+    std::optional<std::size_t> renaming_; // the bookmark whose name is being edited
+    std::array<char, 64> renameText_{};
+    bool renameFocus_ = false; // the name field gets the keyboard in its first frame
+    bool autoRanges_ = true;
+    std::map<resolve::ShadingMode, resolve::ColorScale> scales_; // the scale of each count view
+    std::optional<std::size_t> splitTracer_;
+    float splitAt_ = 0.5f;
+    bool draggingSplit_ = false;
+    std::optional<SaveImageRequest> saveRequest_;
+    std::filesystem::path imageFolder_; // where the last image went
+    std::array<bool, kPanelWindows> folded_{};
+    std::array<bool, kPanelWindows> layoutFolded_{}; // what the dock layout was built for
+    WorkCounter histogramCounter_ = WorkCounter::Cycles;
+    std::string notice_;
+    std::chrono::steady_clock::time_point noticeTime_{};
     bool pickAfterReload_ = false;
     int compareChoice_ = 0;
     std::optional<std::string> compareRequest_;
@@ -425,6 +554,9 @@ private:
     std::map<std::string, double> shaderSeconds_;
     std::optional<Measurement> measurement_;
     std::optional<FrameInFlight> frameInFlight_;
+    // The frame that recordTimings() last took: its hits and work are in the buffers until the
+    // next frame is recorded. wantsDepth() and wantsWorkSummary() ask about it.
+    std::optional<FrameInFlight> finishedFrame_;
     std::optional<std::pair<std::uint32_t, std::uint32_t>> inspectedPixel_; // (x, y) in the frame
     std::optional<tracing::RayLog> rayLog_;
     std::vector<RayLogLine> rayLogLines_;
@@ -448,6 +580,7 @@ private:
     bool lastFrameCounted_ = false;
     std::optional<RayWorkSummary> workSummary_;
     std::chrono::steady_clock::time_point workSummaryTime_{};
+    std::uint64_t workSummaryCameraVersion_ = 0; // the camera of the frame the summary was taken from
     Smoothed rayGenerationMs_;
     Smoothed traceMs_; // of the frames on screen, whatever shader variant they ran
     Smoothed shadingMs_;

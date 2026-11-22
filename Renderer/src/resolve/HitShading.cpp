@@ -27,12 +27,12 @@ struct ShadeWorkParams {
     std::uint32_t width;
     std::uint32_t height;
     std::uint32_t mode; // 0 cells, 1 primitives, 2 runs, 3 kind of the cell at the hit, 4 structure steps, 5 mipmap
-                        // cells, 6 largest square skipped
+                        // cells, 6 largest square skipped, 7 clock cycles
     std::uint32_t scaleKind;
     float scale;
     std::uint32_t rayOrder; // tracing::RayOrder
-    float pad2;
-    float pad3;
+    std::uint32_t warpSize; // 0: the count of the ray; else the largest count of its warp
+    std::uint32_t rayCount;
 };
 
 } // namespace
@@ -66,8 +66,8 @@ void HitShading::shade(VkCommandBuffer cmd, const tracing::RayBatch& batch, VkIm
                                    static_cast<std::uint32_t>(params.workScale.kind),
                                    params.workScale.maximum,
                                    static_cast<std::uint32_t>(batch.order),
-                                   0.0f,
-                                   0.0f};
+                                   showsCount(params.mode) ? params.warpSize : 0u,
+                                   static_cast<std::uint32_t>(batch.count())};
         resources.buffer(kWorkBinding, *work);
         workKernel_.dispatch(cmd, resources, groupsX, groupsY, 1, push);
         return;

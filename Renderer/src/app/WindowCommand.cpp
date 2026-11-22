@@ -41,6 +41,7 @@ Options optionsFor(const Options& start, const WindowState& state, CommandForm f
     if (resolve::showsCount(shading.mode)) {
         options.scaleMaximum = shading.workScale.maximum;
         options.logScale = shading.workScale.kind == resolve::ScaleKind::Log2;
+        options.warpMaximum = shading.warpSize > 0;
     }
     const resolve::LightDirection defaultLight;
     if (resolve::usesLight(shading.mode) &&

@@ -22,4 +22,9 @@ struct FileFilter {
 [[nodiscard]] std::optional<std::filesystem::path> pickFile(const std::vector<FileFilter>& filters,
                                                             const std::filesystem::path& startDirectory);
 
+// The save dialog of the system: a file name to write, starting at `suggested` (folder and name).
+// Returns nothing if the user cancelled. Throws std::runtime_error if the dialog cannot be opened.
+[[nodiscard]] std::optional<std::filesystem::path> pickSaveFile(const std::vector<FileFilter>& filters,
+                                                                const std::filesystem::path& suggested);
+
 } // namespace thesis::app

@@ -3,13 +3,15 @@ thesis_add_library(metrics
         BuildInfo.cpp
         JsonReportSink.cpp
         MetricFanout.cpp
+        RayWorkSummary.cpp
         SystemInfo.cpp
         TracySink.cpp
     PUBLIC_DEPS
         thesis::core
         nlohmann_json::nlohmann_json
     PRIVATE_DEPS
-        thesis::profiling)
+        thesis::profiling
+        thesis::shared)
 
 if(WIN32)
     target_link_libraries(thesis_metrics PRIVATE PowrProf)

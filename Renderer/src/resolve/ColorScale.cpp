@@ -77,12 +77,15 @@ std::vector<ScaleTick> ColorScale::ticks() const
         for (double value = 1.0; value <= maximum; value *= 2.0) {
             values.push_back(value);
         }
-        if (values.size() > kMostLogTicks) {
-            std::vector<double> everySecond;
-            for (std::size_t i = 0; i < values.size(); i += 2) {
-                everySecond.push_back(values[i]);
+        // Every n-th power of two, n as small as keeps at most kMostLogTicks (a scale up to 2^32
+        // has 33 of them).
+        const std::size_t stride = (values.size() + kMostLogTicks - 1) / kMostLogTicks;
+        if (stride > 1) {
+            std::vector<double> thinned;
+            for (std::size_t i = 0; i < values.size(); i += stride) {
+                thinned.push_back(values[i]);
             }
-            values = std::move(everySecond);
+            values = std::move(thinned);
         }
     } else {
         // Counts are whole numbers. 0 is left out: it has its own black box on a bar.

@@ -5,8 +5,8 @@
 #include "ControlPanel.h"
 #include "FramePipeline.h"
 #include "Gui.h"
+#include "PathText.h"
 #include "Presenter.h"
-#include "RayWorkSummary.h"
 #include "RecentFiles.h"
 #include "SceneSetup.h"
 #include "Screenshot.h"
@@ -30,6 +30,7 @@
 #include <exception>
 #include <filesystem>
 #include <format>
+#include <fstream>
 #include <functional>
 #include <future>
 #include <memory>
@@ -101,12 +102,6 @@ private:
     std::chrono::steady_clock::time_point start_ = std::chrono::steady_clock::now();
 };
 
-std::string utf8(const std::filesystem::path& path)
-{
-    const std::u8string text = path.u8string();
-    return {text.begin(), text.end()};
-}
-
 // --self-test: a small sphere to import, written once per run.
 struct SelfTestImport {
     std::filesystem::path mesh;
@@ -119,13 +114,47 @@ struct SelfTestImport {
         SelfTestImport result;
         result.directory = std::filesystem::temp_directory_path() / "thesis_self_test";
         std::filesystem::create_directories(result.directory);
+        // The images of an earlier run would let the "Save image" check pass without a save.
+        for (const auto& entry : std::filesystem::directory_iterator(result.directory)) {
+            if (utf8(entry.path().filename()).starts_with("self_test_image"))
+                std::filesystem::remove(entry.path());
+        }
         result.mesh = result.directory / "self_test_sphere.ply";
         mesh::savePly(result.mesh, mesh::makeSphere({0.0f, 0.0f, 0.0f}, 1.0f, 64));
         result.request = {result.mesh, {64, 32, voxel::VoxelizationRule::Sampled}, voxel::UpAxis::Z};
-        result.expectedFile = voxel::voxelModelName(result.mesh.stem().string(), 64) + ".voxels";
+        result.expectedFile = voxel::voxelModelName(utf8(result.mesh.stem()), 64) + ".voxels";
         return result;
     }
 };
+
+// --self-test: the camera bookmark file. Kept cameras come back when the file is read again, and a
+// damaged file is moved aside, so no later change writes over the user's cameras.
+void checkBookmarkStorage(const std::filesystem::path& directory)
+{
+    const std::filesystem::path storage = directory / "self_test_cameras.json";
+    std::filesystem::path aside = storage;
+    aside.replace_extension(".damaged.json");
+    std::filesystem::remove(storage);
+    std::filesystem::remove(aside);
+
+    const CameraBookmark own{"self test", 10.0f, 20.0f, 0.5f, glm::vec3(0.25f, 0.0f, 0.0f)};
+    {
+        CameraBookmarks written(storage);
+        written.put(own);
+    }
+    const CameraBookmarks read(storage);
+    const std::size_t expected = CameraBookmarks::defaults().size() + 1;
+    if (!read.problem().empty() || read.list().size() != expected || read.list().back().name != own.name ||
+        read.list().back().offset != own.offset)
+        throw std::runtime_error("The camera bookmark file did not give back the cameras written to it");
+
+    std::ofstream(storage) << "{ not json";
+    const CameraBookmarks damaged(storage);
+    if (damaged.problem().empty() || !std::filesystem::exists(aside) || std::filesystem::exists(storage) ||
+        damaged.list().size() != CameraBookmarks::defaults().size())
+        throw std::runtime_error("A damaged camera bookmark file was not moved aside with a problem shown");
+    std::printf("Bookmark file check: %zu cameras read back; a damaged file was moved aside.\n", expected);
+}
 
 // The header of each voxel file of the model list. The headers only: a few small reads, also for
 // large files.
@@ -213,9 +242,84 @@ public:
         }
         steps_.push_back([](ControlPanel& panel) { panel.selectRayOrder(THESIS_RAY_ORDER_TILES); });
         steps_.push_back([](ControlPanel& panel) { panel.selectRayOrder(THESIS_RAY_ORDER_ROWS); });
-        for (std::size_t i = 0; i < kCameraPresets.size(); ++i) {
-            steps_.push_back([i](ControlPanel& panel) { panel.selectCameraPreset(i); });
+        for (std::size_t i = 0; i < CameraBookmarks::defaults().size(); ++i) {
+            steps_.push_back([i](ControlPanel& panel) { panel.selectBookmark(i); });
         }
+        // A camera bookmark of its own: kept, picked, deleted (the self-test's bookmarks live in memory).
+        steps_.push_back([](ControlPanel& panel) { panel.saveBookmark("self test"); });
+        steps_.push_back([](ControlPanel& panel) {
+            const std::vector<CameraBookmark>& list = panel.bookmarks().list();
+            if (list.empty() || list.back().name != "self test")
+                throw std::runtime_error("Keep view did not add the camera bookmark");
+            panel.selectBookmark(list.size() - 1);
+        });
+        steps_.push_back([](ControlPanel& panel) { panel.removeBookmark(panel.bookmarks().list().size() - 1); });
+        steps_.push_back([directory = import.directory](ControlPanel&) { checkBookmarkStorage(directory); });
+        // The clock view, the warp maximum, the automatic ranges, the A/B image, the folding and
+        // "Save image".
+        steps_.push_back([](ControlPanel& panel) { panel.selectView(resolve::ShadingMode::WorkCycles); });
+        steps_.push_back([](ControlPanel& panel) { panel.showWarpMaximum(true); });
+        steps_.push_back([](ControlPanel& panel) {
+            if (!panel.inspectCostliest(WorkCounter::Cycles))
+                throw std::runtime_error("The cycles view got no work summary, so there is no costliest ray");
+        });
+        steps_.push_back([](ControlPanel& panel) { panel.stopInspecting(); });
+        steps_.push_back([](ControlPanel& panel) { panel.showWarpMaximum(false); });
+        steps_.push_back([](ControlPanel& panel) { panel.selectView(resolve::ShadingMode::Distance); });
+        // The distance view with automatic ranges asks for the depth of the frame on screen.
+        steps_.push_back([](ControlPanel& panel) {
+            if (!panel.depthIsCurrent())
+                throw std::runtime_error("The distance view got no depth, so its range cannot follow the surface");
+            std::printf("Depth check: distance range %.1f to %.1f.\n", panel.shading().distanceNear,
+                        panel.shading().distanceFar);
+        });
+        steps_.push_back([](ControlPanel& panel) { panel.setAutoRanges(false); });
+        steps_.push_back([](ControlPanel& panel) { panel.setAutoRanges(true); });
+        steps_.push_back([](ControlPanel& panel) {
+            panel.compareInImage((panel.activeTracer() + 1) % panel.facts().tracers.size());
+        });
+        steps_.push_back([directory = import.directory](ControlPanel& panel) {
+            panel.saveImage(directory / "self_test_image.png");
+        });
+        steps_.push_back([directory = import.directory](ControlPanel& panel) {
+            if (!std::filesystem::is_regular_file(directory / "self_test_image.png") ||
+                !std::filesystem::is_regular_file(directory / "self_test_image.txt"))
+                throw std::runtime_error("Save image wrote no image or no command file");
+            // With A/B on, the B image too: self_test_image_B_<tracer>.png.
+            bool second = false;
+            for (const auto& entry : std::filesystem::directory_iterator(directory))
+                second = second || utf8(entry.path().filename()).starts_with("self_test_image_B_");
+            if (!second)
+                throw std::runtime_error("Save image with A/B on wrote no B image");
+            std::printf("Save image check: image, B image and command written.\n");
+            panel.compareInImage(std::nullopt);
+        });
+        // Two quick saves of one second get two names; a named save never writes over a command
+        // file that belongs to no image of that name. The requests are taken here, so no file is written.
+        steps_.push_back([directory = import.directory](ControlPanel& panel) {
+            panel.saveImage(); // into the folder of the last image: the self-test's folder
+            const std::optional<SaveImageRequest> first = panel.takeSaveImageRequest();
+            if (!first || first->file.parent_path() != directory)
+                throw std::runtime_error("Save (P) asked for no image in the folder of the last image");
+            std::ofstream(first->file) << "taken";
+            panel.saveImage();
+            const std::optional<SaveImageRequest> second = panel.takeSaveImageRequest();
+            std::filesystem::remove(first->file);
+            if (!second || second->file == first->file)
+                throw std::runtime_error("Two quick saves got the same file name");
+            const std::filesystem::path notes = directory / "self_test_image_notes.txt";
+            std::ofstream(notes) << "notes";
+            panel.saveImage(directory / "self_test_image_notes.png");
+            const bool refused = !panel.takeSaveImageRequest();
+            std::filesystem::remove(notes);
+            if (!refused)
+                throw std::runtime_error("Save as would write over a text file that belongs to no image");
+            panel.reportProblem(""); // the refusal's message, expected here
+            std::printf("Save name check: second quick save got its own name; foreign .txt kept.\n");
+        });
+        steps_.push_back([](ControlPanel& panel) { panel.toggleImageOnly(); });
+        steps_.push_back([](ControlPanel& panel) { panel.toggleImageOnly(); });
+        steps_.push_back([](ControlPanel& panel) { panel.selectView(resolve::ShadingMode::Shaded); });
         // The next model of the list, and back.
         if (facts.models.size() > 1) {
             const std::size_t next = (facts.model + 1) % facts.models.size();
@@ -273,7 +377,9 @@ public:
                 [option](ControlPanel& panel) { panel.selectEncodingSetting(option.setting, option.values.back()); });
         }
         steps_.push_back([](ControlPanel& panel) { panel.selectNextBrickSize(); });
-        steps_.push_back([](ControlPanel& panel) { panel.selectCameraPreset(1); });
+        steps_.push_back([](ControlPanel& panel) { panel.selectBookmark(1); });
+        // Fixed ranges: an automatic range could change between the frame and its check.
+        steps_.push_back([](ControlPanel& panel) { panel.setAutoRanges(false); });
         // Another tracer that finds hits and counts work, so the frame has a surface and a work view.
         steps_.push_back([](ControlPanel& panel) {
             const std::vector<PanelFacts::Tracer>& tracers = panel.facts().tracers;
@@ -285,6 +391,7 @@ public:
             }
         });
         steps_.push_back([](ControlPanel& panel) { panel.selectView(resolve::ShadingMode::WorkPrimitives); });
+        steps_.push_back([](ControlPanel& panel) { panel.showWarpMaximum(true); });
         steps_.push_back([](ControlPanel& panel) { panel.copyCommand(CommandForm::Benchmark); });
         steps_.push_back([](ControlPanel& panel) { panel.copyCommand(CommandForm::Screenshot); });
         // No change in this step: the frame on screen belongs to the state of the panel.
@@ -319,7 +426,7 @@ std::size_t checkCommand(const gpu::Context& context, const Options& start, cons
 {
     const std::vector<std::string> arguments =
         commandArguments(optionsFor(start, state, CommandForm::Screenshot), CommandForm::Screenshot);
-    std::printf("Command check: %s\n", commandLine(start.program.generic_string(), arguments).c_str());
+    std::printf("Command check: %s\n", commandLine(utf8Generic(start.program), arguments).c_str());
     ParsedCommand parsed = parseCommandLine(arguments);
     if (parsed.exitCode) {
         throw std::runtime_error("The command of the window does not parse");
@@ -431,7 +538,7 @@ int runInteractive(const Options& options)
         std::make_unique<FramePipeline>(context, options.shaderDirectory, VkExtent2D{options.width, options.height},
                                         static_cast<tracing::RayOrder>(options.rayOrder));
     const auto commandWriter = [options](const WindowState& state, CommandForm form) {
-        return commandLine(options.program.generic_string(), commandArguments(optionsFor(options, state, form), form));
+        return commandLine(utf8Generic(options.program), commandArguments(optionsFor(options, state, form), form));
     };
 
     // Uploads a built scene and prepares every tracer for it, so that switching tracers is
@@ -493,6 +600,7 @@ int runInteractive(const Options& options)
         facts.height = options.height;
         facts.rayOrder = static_cast<std::uint32_t>(pipeline->batch().order);
         facts.rayAndHitBytes = pipeline->batch().memoryBytes();
+        facts.warpSize = context.info().subgroupSize;
         facts.command = commandWriter;
 
         for (const auto& entry : registry.entries()) {
@@ -504,9 +612,10 @@ int runInteractive(const Options& options)
                 facts.tracers.push_back(
                     {entry.name, entry.description, text.label, text.method, text.structureStep, tracer->memoryBytes(),
                      report.gpuMilliseconds + report.cpuMilliseconds, report.cpuMilliseconds > 0.0,
-                     tracer->countsWork(), tracer->findsHits(), tracer->countsStructureSteps(),
+                     tracer->countsWork(), tracer->findsHits(), tracer->countsStructureSteps(), tracer->countsCycles(),
                      [plugin](const tracing::DiagramInput& input) { return plugin->diagram(input); },
-                     [plugin](const core::RayLogEntry& step) { return plugin->describeStructureStep(step); }});
+                     [plugin](const core::RayLogEntry& step) { return plugin->describeStructureStep(step); },
+                     tracer->warpsFollowRayList()});
                 active->tracers.push_back(std::move(tracer));
             } catch (const tracing::UnsupportedScene& reason) {
                 facts.skippedTracers.push_back(entry.name + ": " + reason.what());
@@ -554,12 +663,38 @@ int runInteractive(const Options& options)
         tour.emplace(facts, *selfTestImport, commandCheckDue);
     }
     const auto [firstCamera, firstPreset] = startCameraOf(active->gpuScene.bounds, true);
-    ControlPanel panel(std::move(facts), firstCamera, firstPreset, startShading(options, firstCamera), initialTracer);
+    ControlPanel panel(std::move(facts), firstCamera, firstPreset,
+                       startShading(options, firstCamera, context.info().subgroupSize), initialTracer);
+    // A range given on the command line (e.g. from "Copy as command") is kept: the automatic
+    // ranges would replace it with the first frame's.
+    if (options.scaleMaximum || options.distanceRange.size() == 2)
+        panel.setAutoRanges(false);
     if (options.inspect.size() == 2) {
         panel.inspectPixel(options.inspect[0], options.inspect[1]);
     }
-    // The self-test leaves the user's list of recent files alone.
+    // The self-test leaves the user's list of recent files and camera bookmarks alone.
     panel.useRecentFiles(options.selfTest ? RecentFiles{} : RecentFiles(RecentFiles::defaultStorage()));
+    panel.useCameraBookmarks(options.selfTest ? CameraBookmarks{} : CameraBookmarks(CameraBookmarks::defaultStorage()));
+    // The frame of the right side of the A/B image: its own rays, hits and image, made when first used.
+    std::unique_ptr<FramePipeline> splitPipeline;
+    bool splitTraced = false; // the frame on its way traced the right side too
+    // `splitWasTraced`: the frame that just finished also traced B into splitPipeline.
+    const auto saveImages = [&](const SaveImageRequest& request, bool splitWasTraced) {
+        if (!request.file.parent_path().empty())
+            std::filesystem::create_directories(request.file.parent_path());
+        const auto image = [&](FramePipeline& frame) {
+            return resolve::RgbaImage{options.width, options.height, gpu::downloadImage(context, frame.output())};
+        };
+        writeFigure(image(*pipeline), panel.shading(), request.file);
+        if (request.second && splitWasTraced && panel.splitTracer())
+            writeFigure(image(*splitPipeline), panel.shadingFor(*panel.splitTracer()), *request.second);
+        const std::filesystem::path text = request.commandFile();
+        std::ofstream command(text);
+        command << request.command << "\n";
+        if (!command)
+            throw std::runtime_error("cannot write " + utf8(text));
+        panel.imageSaved(request.file);
+    };
     metrics::TracySink tracySink;
     std::uint64_t frameIndex = 0;
     std::optional<std::future<BuiltRequest>> loading;
@@ -580,6 +715,9 @@ int runInteractive(const Options& options)
         // The previous frame has finished on the GPU, so its timings can be read.
         if (presenter.waitForPreviousFrame()) {
             const std::vector<gpu::StageTiming> timings = pipeline->collectTimings();
+            const bool splitWasTraced = std::exchange(splitTraced, false) && splitPipeline;
+            if (splitWasTraced)
+                (void)splitPipeline->collectTimings(); // not kept: the window times the frame of A only
             panel.setWindowFocused(window.focused() && !window.minimised());
             panel.recordTimings(timings);
             metrics::FrameSample sample{0, frameIndex, pipeline->batch().count(), {}};
@@ -588,6 +726,24 @@ int runInteractive(const Options& options)
             }
             tracySink.recordFrame(sample);
 
+            // "Save image" and the --self-test command check first: the frame that just finished
+            // was shaded with the panel's shading of now. The work summary and the depth below
+            // may change it (the automatic ranges) for the next frame.
+            if (std::optional<SaveImageRequest> save = panel.takeSaveImageRequest()) {
+                try {
+                    saveImages(*save, splitWasTraced);
+                } catch (const std::exception& error) {
+                    panel.reportProblem(std::string("Save image: ") + error.what());
+                }
+            }
+            if (std::exchange(commandCheckDue, false)) {
+                const std::size_t differing = checkCommand(context, options, panel.windowState(), pipeline->output());
+                std::printf("Command check: %zu of %u pixels differ from the window's frame.\n", differing,
+                            options.width * options.height);
+                if (differing != 0)
+                    exitCode = 3;
+            }
+
             // What the counting variant wrote in that frame: the steps of the inspected ray, and
             // (about once a second, while a work view is on) the average work of the rays.
             panel.recordRayLog(pipeline->rayLog());
@@ -595,9 +751,10 @@ int runInteractive(const Options& options)
                 const std::size_t count = pipeline->batch().count();
                 const std::vector<std::byte> workBytes = gpu::downloadBuffer(context, *pipeline->work());
                 const std::vector<std::byte> hitBytes = gpu::downloadBuffer(context, pipeline->batch().hits);
-                RayWorkSummary summary;
+                metrics::RayWorkSummary summary;
                 summary.add({reinterpret_cast<const core::RayWork*>(workBytes.data()), count},
-                            {reinterpret_cast<const core::Hit*>(hitBytes.data()), count});
+                            {reinterpret_cast<const core::Hit*>(hitBytes.data()), count},
+                            panel.activeTracerWarps() ? context.info().subgroupSize : 0u);
                 panel.recordWorkSummary(summary);
             }
             // Once for each camera position: the distance to the surface of each pixel, so that the
@@ -608,14 +765,6 @@ int runInteractive(const Options& options)
                     DepthMap::fromHits({reinterpret_cast<const core::Hit*>(hitBytes.data()), pipeline->batch().count()},
                                        pipeline->batch().width, pipeline->batch().height,
                                        static_cast<std::uint32_t>(pipeline->batch().order)));
-            }
-            // --self-test: the frame that just finished belongs to the panel state of now.
-            if (std::exchange(commandCheckDue, false)) {
-                const std::size_t differing = checkCommand(context, options, panel.windowState(), pipeline->output());
-                std::printf("Command check: %zu of %u pixels differ from the window's frame.\n", differing,
-                            options.width * options.height);
-                if (differing != 0)
-                    exitCode = 3;
             }
         }
 
@@ -649,6 +798,8 @@ int runInteractive(const Options& options)
             PanelFacts restored;
             active = activate(buildScene(source, loadedRequest, models.at(loadedRequest.model)), restored);
             // The model and encoding are identical, so the inspector can retain its recorded ray.
+            // The panel takes the new facts all the same: their hooks point at the new tracers.
+            panel.sceneRebuilt(std::move(restored));
         }
 
         // A scene built on the worker thread is ready: free the old scene on the GPU (both would
@@ -797,12 +948,12 @@ int runInteractive(const Options& options)
         // Another ray order: a new frame pipeline. The previous frame has finished, so the old one can go.
         if (panel.wantedRayOrder() != static_cast<std::uint32_t>(pipeline->batch().order)) {
             pipeline.reset();
+            splitPipeline.reset();
             pipeline = std::make_unique<FramePipeline>(context, options.shaderDirectory,
                                                        VkExtent2D{options.width, options.height},
                                                        static_cast<tracing::RayOrder>(panel.wantedRayOrder()));
             panel.rayOrderChanged(static_cast<std::uint32_t>(pipeline->batch().order));
         }
-
         const std::optional<VkCommandBuffer> cmd = presenter.beginFrame();
         if (!cmd) {
             gui.swapchainRebuilt();
@@ -813,15 +964,34 @@ int runInteractive(const Options& options)
         panel.handleInput();
         panel.draw();
 
+        // After the panel: the keys and clicks of this frame may switch the A/B image, its tracer or
+        // the view, and the frame must trace what the panel shows (its split line, FrameInFlight).
+        const std::optional<std::size_t> splitTracer = panel.splitTracer();
+        if (splitTracer && !splitPipeline) {
+            splitPipeline = std::make_unique<FramePipeline>(
+                context, options.shaderDirectory, VkExtent2D{options.width, options.height}, pipeline->batch().order);
+        }
+
+        const core::CameraFrame cameraFrame = panel.camera().frame(pipeline->aspectRatio());
         pipeline->begin(*cmd);
         pipeline->setLoggedRay(panel.loggedRay());
-        pipeline->trace(*cmd, *active->tracers[panel.activeTracer()], panel.camera().frame(pipeline->aspectRatio()),
-                        panel.countWork());
+        pipeline->trace(*cmd, *active->tracers[panel.activeTracer()], cameraFrame, panel.countWork());
         pipeline->shade(*cmd, panel.shading());
-        const bool rebuilt = presenter.present(pipeline->output(), panel.imageArea(),
-                                               [&](VkCommandBuffer overlayCmd, VkImageView view, VkExtent2D extent) {
-                                                   gui.render(overlayCmd, view, extent);
-                                               });
+        // The A/B image: the second tracer traces the same camera rays into its own frame.
+        std::optional<Presenter::Split> split;
+        if (splitTracer && splitPipeline) {
+            splitPipeline->begin(*cmd);
+            splitPipeline->trace(*cmd, *active->tracers[*splitTracer], cameraFrame, panel.countWorkFor(*splitTracer));
+            splitPipeline->shade(*cmd, panel.shadingFor(*splitTracer));
+            split.emplace(Presenter::Split{splitPipeline->output(), panel.splitAt()});
+        }
+        const bool rebuilt = presenter.present(
+            pipeline->output(), panel.imageArea(),
+            [&](VkCommandBuffer overlayCmd, VkImageView view, VkExtent2D extent) {
+                gui.render(overlayCmd, view, extent);
+            },
+            split);
+        splitTraced = split.has_value();
         if (rebuilt) {
             gui.swapchainRebuilt();
         }

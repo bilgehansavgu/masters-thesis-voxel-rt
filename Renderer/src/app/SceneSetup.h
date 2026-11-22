@@ -102,9 +102,11 @@ private:
 // camera of --exact-camera.
 [[nodiscard]] core::OrbitCamera startCamera(const Options& options, const core::Bounds& bounds);
 
-// How the frame is shaded at the start: --view, --scale-max, --log-scale, --light and
+// How the frame is shaded at the start: --view, --scale-max, --log-scale, --warp-max, --light and
 // --distance-range. Without --distance-range the distance view spans twice the camera distance.
-[[nodiscard]] resolve::ShadingParams startShading(const Options& options, const core::OrbitCamera& camera);
+// `warpSize`: the subgroup size of the GPU, used with --warp-max.
+[[nodiscard]] resolve::ShadingParams startShading(const Options& options, const core::OrbitCamera& camera,
+                                                  std::uint32_t warpSize);
 
 // All tracers built into the program, in registration order.
 [[nodiscard]] tracing::TracerRegistry makeTracerRegistry();

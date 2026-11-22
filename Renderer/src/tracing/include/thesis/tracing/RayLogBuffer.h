@@ -28,6 +28,7 @@ public:
     [[nodiscard]] const gpu::Buffer& buffer() const { return gpuBuffer_; }
 
 private:
+    VkPipelineStageFlags2 shaderStages_; // the stages a tracer may write the log from
     gpu::Buffer gpuBuffer_;
     gpu::Buffer cpuCopy_;
 };

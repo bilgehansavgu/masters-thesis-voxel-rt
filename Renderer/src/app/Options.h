@@ -43,11 +43,14 @@ struct Options {
     // The camera at the start: yaw and pitch in degrees, then the distance as a factor of the
     // distance that shows the whole scene. Benchmark: where the orbit starts and how far out it is.
     std::vector<float> camera{35.0f, 30.0f, 1.0f};
-    std::uint32_t view = 1; // the view, numbered as in the panel of the window (1 to 12)
-    // Screenshot of a count view (--view 6, 7, 8, 10 or 11): the count at the end of the colour map,
-    // and a log2 instead of a linear scale. The image gets the colour bar below it.
-    float scaleMaximum = 64.0f;
+    std::uint32_t view = 1; // the view, numbered as in the panel of the window (1 to 13)
+    // Screenshot of a count view (--view 6, 7, 8, 10, 11 or 13): the count at the end of the colour
+    // map, and a log2 instead of a linear scale. The image gets the colour bar below it. Unset:
+    // resolve::defaultScaleMaximum of the view. Window: a set range turns the automatic ranges off.
+    std::optional<float> scaleMaximum;
     bool logScale = false;
+    // Count views: each pixel shows the largest count of its warp (resolve::ShadingParams::warpSize).
+    bool warpMaximum = false;
     // The light of the lit views (1 and 5): azimuth and elevation in degrees. Empty: the default light.
     std::vector<float> light;
     // The distance view (2): the distances shown as white and black. Empty: 0 to twice the camera distance.

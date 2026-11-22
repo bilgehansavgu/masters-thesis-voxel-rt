@@ -77,7 +77,8 @@ float paintBar(ILegendPainter& painter, const LegendBar& bar, float left, float 
     const float top = std::round(y);
     const float bottom = top + barHeight;
     const float rampLeft = std::round(left + (bar.below ? belowWidth + gap : 0.0f));
-    const float rampRight = std::round(left + width - (bar.above ? aboveWidth + gap : 0.0f));
+    // In a column narrower than the end boxes the strip has no width; it never turns negative.
+    const float rampRight = std::max(rampLeft, std::round(left + width - (bar.above ? aboveWidth + gap : 0.0f)));
     const float textInBox = top + std::round(0.5f * (barHeight - s));
 
     const auto endBox = [&](const Swatch& swatch, float x0, float boxW) {
@@ -112,7 +113,8 @@ float paintBar(ILegendPainter& painter, const LegendBar& bar, float left, float 
         const float x = std::round(rampLeft + tick.position * rampWidth);
         painter.fillVertical(x, bottom, x + 1.0f, bottom + tickLength, kTextColor, kTextColor);
         const float labelWidth = painter.textWidth(tick.label);
-        const float labelLeft = std::clamp(x - 0.5f * labelWidth, rampLeft, rampRight - labelWidth);
+        // A label wider than the strip starts at its left end (std::clamp needs low <= high).
+        const float labelLeft = std::clamp(x - 0.5f * labelWidth, rampLeft, std::max(rampLeft, rampRight - labelWidth));
         if (labelLeft < previousLabelRight + 0.5f * s) {
             continue;
         }

@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <stdexcept>
 #include <utility>
 
 namespace thesis::app {
@@ -73,7 +74,8 @@ std::optional<VkCommandBuffer> Presenter::beginFrame()
     return commandBuffer_;
 }
 
-bool Presenter::present(gpu::StorageImage& image, PixelRect area, const Overlay& overlay)
+bool Presenter::present(gpu::StorageImage& image, PixelRect area, const Overlay& overlay,
+                        const std::optional<Split>& split)
 {
     const VkCommandBuffer cmd = commandBuffer_;
     const VkImage target = swapchain_.image(imageIndex_);
@@ -81,6 +83,13 @@ bool Presenter::present(gpu::StorageImage& image, PixelRect area, const Overlay&
     // Clear the window image (for the bars around a letterboxed picture), then blit into it.
     image.transition(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_BLIT_BIT,
                      VK_ACCESS_2_TRANSFER_READ_BIT);
+    if (split) {
+        if (split->right.extent().width != image.extent().width ||
+            split->right.extent().height != image.extent().height)
+            throw std::logic_error("Presenter::present: the two images of a split differ in size");
+        split->right.transition(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_BLIT_BIT,
+                                VK_ACCESS_2_TRANSFER_READ_BIT);
+    }
     gpu::imageBarrier(cmd, target, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                       VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
                       VK_ACCESS_2_TRANSFER_WRITE_BIT);
@@ -117,7 +126,35 @@ bool Presenter::present(gpu::StorageImage& image, PixelRect area, const Overlay&
     blitInfo.regionCount = 1;
     blitInfo.pRegions = &blit;
     blitInfo.filter = VK_FILTER_LINEAR;
-    vkCmdBlitImage2(cmd, &blitInfo);
+    if (!split) {
+        vkCmdBlitImage2(cmd, &blitInfo);
+    } else {
+        // Two blits: columns [0, line) of `image`, columns [line, width) of the right image, each to
+        // the matching part of the picture.
+        const auto width = static_cast<std::int32_t>(image.extent().width);
+        const std::int32_t line =
+            std::clamp(static_cast<std::int32_t>(split->at * static_cast<float>(width)), 0, width);
+        const std::int32_t screenLine =
+            destination.x0 + static_cast<std::int32_t>(static_cast<float>(destination.width()) *
+                                                       static_cast<float>(line) / static_cast<float>(width));
+        VkImageBlit2 left = blit;
+        left.srcOffsets[1].x = line;
+        left.dstOffsets[1].x = screenLine;
+        VkImageBlit2 right = blit;
+        right.srcOffsets[0].x = line;
+        right.dstOffsets[0].x = screenLine;
+        // A blit needs a destination at least one pixel wide: a line near either edge of a frame
+        // shown smaller than its size can land on the edge of the picture.
+        if (line > 0 && screenLine > destination.x0) {
+            blitInfo.pRegions = &left;
+            vkCmdBlitImage2(cmd, &blitInfo);
+        }
+        if (line < width && screenLine < destination.x1) {
+            blitInfo.srcImage = split->right.image();
+            blitInfo.pRegions = &right;
+            vkCmdBlitImage2(cmd, &blitInfo);
+        }
+    }
 
     // Overlay (the control panel), then hand the image to the window system.
     gpu::imageBarrier(cmd, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,

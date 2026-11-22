@@ -15,12 +15,12 @@ struct ShadeWorkParams
     uint height;
     uint mode;   // 0 cells visited, 1 primitives tested, 2 runs tested, 3 kind of the cell at the hit,
                  // 4 steps through the search structure, 5 mipmap cells read,
-                 // 6 the largest mipmap square that the ray skipped
+                 // 6 the largest mipmap square that the ray skipped, 7 GPU clock cycles
     uint scaleKind; // THESIS_COLOR_SCALE_LINEAR or THESIS_COLOR_SCALE_LOG2
     float scale;    // the count at the end of the colour map; a larger count is white
     uint rayOrder;  // THESIS_RAY_ORDER_*: where the hit and work of a pixel are in their lists
-    float pad2;
-    float pad3;
+    uint warpSize;  // count views: 0 shows the count of the ray, else the largest count of its warp
+    uint rayCount;  // width * height
 };
 
 [[vk::push_constant]] ConstantBuffer<ShadeWorkParams> gParams;
@@ -74,6 +74,22 @@ float3 countColor(float count, float scale, uint kind)
     return pow(viridis(scalePosition(count, scale, kind)), THESIS_DISPLAY_GAMMA);
 }
 
+// The count that count view `mode` shows for one ray.
+uint countOf(RayWork work, uint mode)
+{
+    if (mode == 0)
+        return work.cells;
+    if (mode == 1)
+        return work.primitiveTests;
+    if (mode == 4)
+        return work.structureSteps;
+    if (mode == 5)
+        return work.mipmapCells;
+    if (mode == 7)
+        return work.cycles;
+    return work.runs;
+}
+
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void main(uint3 threadId : SV_DispatchThreadID)
@@ -106,15 +122,16 @@ void main(uint3 threadId : SV_DispatchThreadID)
     }
     else
     {
-        uint count = work.runs;
-        if (gParams.mode == 0)
-            count = work.cells;
-        else if (gParams.mode == 1)
-            count = work.primitiveTests;
-        else if (gParams.mode == 4)
-            count = work.structureSteps;
-        else if (gParams.mode == 5)
-            count = work.mipmapCells;
+        uint count = countOf(work, gParams.mode);
+        if (gParams.warpSize > 0)
+        {
+            // The warp of the ray: rays [k * warpSize, (k + 1) * warpSize) of the list run together,
+            // and the warp is busy until its largest count is done.
+            const uint first = index - index % gParams.warpSize;
+            const uint end = min(first + gParams.warpSize, gParams.rayCount);
+            for (uint ray = first; ray < end; ++ray)
+                count = max(count, countOf(gWork[ray], gParams.mode));
+        }
         color = countColor(float(count), gParams.scale, gParams.scaleKind);
     }
 

@@ -1,5 +1,7 @@
 #include "RecentFiles.h"
 
+#include "PathText.h"
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -9,21 +11,6 @@
 #include <system_error>
 
 namespace thesis::app {
-namespace {
-
-// JSON holds UTF-8 text; a path may hold any character.
-std::string utf8(const std::filesystem::path& path)
-{
-    const std::u8string text = path.u8string();
-    return {text.begin(), text.end()};
-}
-
-std::filesystem::path fromUtf8(const std::string& text)
-{
-    return std::filesystem::path(std::u8string(text.begin(), text.end()));
-}
-
-} // namespace
 
 RecentFiles::RecentFiles(std::filesystem::path storage) : storage_(std::move(storage))
 {
@@ -34,7 +21,7 @@ RecentFiles::RecentFiles(std::filesystem::path storage) : storage_(std::move(sto
         const nlohmann::json json = nlohmann::json::parse(file);
         for (const auto& [kind, files] : json.items()) {
             for (const nlohmann::json& entry : files)
-                lists_[kind].push_back(fromUtf8(entry.get<std::string>()));
+                lists_[kind].push_back(pathFromUtf8(entry.get<std::string>()));
         }
     } catch (const nlohmann::json::exception&) {
         lists_.clear();
@@ -77,7 +64,7 @@ void RecentFiles::save() const
     std::ofstream out(storage_);
     out << json.dump(2);
     if (!out)
-        throw std::runtime_error("Cannot write the list of recent files '" + storage_.string() + "'");
+        throw std::runtime_error("Cannot write the list of recent files '" + utf8(storage_) + "'");
 }
 
 std::vector<std::filesystem::path> RecentFiles::list(const std::string& kind) const

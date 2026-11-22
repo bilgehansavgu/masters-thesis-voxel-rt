@@ -39,6 +39,8 @@ public struct WorkCounter
         counter.work.mipmapCells = 0;
         counter.work.mipmapSkips = 0;
         counter.work.skippedLevels = 0;
+        counter.work.cycles = 0;
+        counter.work.clockStart = clock2x32ARB().x;
         counter.logging = gRayLog[0].kind == rayIndex;
         counter.logged = 0;
         counter.lost = 0;
@@ -47,7 +49,8 @@ public struct WorkCounter
 
     // Continues the count that an earlier shader of the same ray stored. A ray tracing pipeline
     // runs one ray in several shaders (ray generation, intersection, closest hit), one after
-    // the other on the same thread, so the count passes through the work list between them.
+    // the other, so the count passes through the work list between them (by ray index: the
+    // shaders of one ray need not run in the same subgroup).
     public static WorkCounter resume(uint rayIndex)
     {
         WorkCounter counter;
@@ -137,8 +140,15 @@ public struct WorkCounter
 
     [mutating] public void hitCell(uint kind) { work.hitCell = kind; }
 
-    public void store(uint rayIndex)
+    // WHY the clock of the subgroup (the SM's cycle counter) and not the device clock: it counts
+    // cycles, fine enough for one ray, where the device clock ticks too coarsely. The low 32 bits
+    // wrap after seconds; the unsigned difference stays right across one wrap. The SM clocks
+    // differ, so the difference is valid only if the ray's start and its store ran in the same
+    // subgroup. A ray tracing pipeline does not promise that across TraceRay (Vulkan may repack
+    // the invocations there), so its tracers report no cycles: ITracer::countsCycles says so.
+    [mutating] public void store(uint rayIndex)
     {
+        work.cycles = clock2x32ARB().x - work.clockStart;
         gRayWork[rayIndex] = work;
         if (logging)
         {
@@ -174,7 +184,7 @@ public struct WorkCounter
     [mutating] public void voxelHit(uint2 position, uint height, uint face, float t) {}
     [mutating] public void hitCell(uint kind) {}
 
-    public void store(uint rayIndex) {}
+    [mutating] public void store(uint rayIndex) {}
 };
 
 #endif

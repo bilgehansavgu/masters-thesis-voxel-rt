@@ -41,6 +41,8 @@ struct DeviceInfo {
     std::uint32_t timestampValidBits = 64;
     VkDeviceSize minScratchOffsetAlignment = 256;
     VkDeviceSize deviceLocalBytes = 0;
+    // Threads that run one instruction together (a warp on NVIDIA: 32).
+    std::uint32_t subgroupSize = 32;
     // Shader binding table layout of ray tracing pipelines (VkPhysicalDeviceRayTracingPipelinePropertiesKHR).
     // Zero when the device has no ray tracing pipelines.
     std::uint32_t shaderGroupHandleSize = 0;
@@ -83,6 +85,16 @@ public:
     // True if ray tracing pipelines (VK_KHR_ray_tracing_pipeline) are on: RayTracingPipeline needs them.
     // Optional, because the tracers built on ray queries do not.
     [[nodiscard]] bool rayTracingPipelines() const { return rayTracingPipelines_; }
+
+    // The shader stages that may read and write storage buffers: compute, and the ray tracing
+    // shaders when ray tracing pipelines are on. A barrier around work that a compute shader or a
+    // ray tracing pipeline may run names all of them. The ray tracing stage is valid in a barrier
+    // only when that feature is on.
+    [[nodiscard]] VkPipelineStageFlags2 storageShaderStages() const
+    {
+        return VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+               (rayTracingPipelines_ ? VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR : VkPipelineStageFlags2{0});
+    }
 
     // True if shader execution reordering (VK_NV_ray_tracing_invocation_reorder) is on AND the
     // driver says that it really reorders. A driver may accept the reorder calls and ignore them;

@@ -20,6 +20,8 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SIDES = ("CPU", "GPU", "Shared", "View")
 REGISTRATION = re.compile(r'registry\.add\(\s*"([^"]+)"')
+# Every registration, with its first argument: a name the check cannot read is a name it cannot hold.
+ANY_REGISTRATION = re.compile(r'registry\.add\(\s*(\S)')
 STRING = re.compile(r'"((?:[^"\\\n]|\\.)*)"')
 SIDE = re.compile(r"^(?://|/\*) Side: (\w+)")
 
@@ -27,13 +29,20 @@ SIDE = re.compile(r"^(?://|/\*) Side: (\w+)")
 INCLUDE = re.compile(r'^\s*#include [<"]([^>"]+)[>"]')
 
 
-def plugins():
+def plugins(problems):
     """Name of each tracer and encoding -> (the folders that may name it, the include prefix of
     the plugin's own headers)."""
     owners = {}
     for socket in ("tracers", "encodings"):
         for source in (ROOT / "src" / socket).rglob("*.cpp"):
-            for name in REGISTRATION.findall(source.read_text(encoding="utf-8")):
+            # Without line comments, as check_names reads code: a comment that shows a call is no call.
+            text = "\n".join(line.split("//", 1)[0] for line in source.read_text(encoding="utf-8").splitlines())
+            for match in ANY_REGISTRATION.finditer(text):
+                if match.group(1) != '"':
+                    number = text.count("\n", 0, match.start()) + 1
+                    problems.append(f"{source.relative_to(ROOT)}:{number}: registers a plugin under a name that is "
+                                    "not a string literal; this check reads names only from registry.add(\"name\", ...)")
+            for name in REGISTRATION.findall(text):
                 plugin_folder = source.relative_to(ROOT / "src" / socket).parts[0]
                 headers = ROOT / "src" / socket / plugin_folder / "include"
                 prefixes = [f"{d.relative_to(headers).as_posix()}/" for d in headers.glob("thesis/*/*")
@@ -122,7 +131,7 @@ def check_sides(problems):
 
 def main():
     problems = []
-    owners = plugins()
+    owners = plugins(problems)
     if not owners:
         problems.append("scripts/check_architecture.py: found no plugin registrations")
     check_names(owners, problems)

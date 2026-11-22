@@ -32,6 +32,12 @@ public struct RayWork
     public uint mipmapCells;    // cells of the min/max mipmaps of the bricks the ray read; 0 without mipmap
     public uint mipmapSkips;    // of those, the cells whose square the ray passed by, so the walk skipped it
     public uint skippedLevels;  // bit L is set if the walk skipped a square of level L (2^L x 2^L cells)
+    // GPU clock cycles from the start of the ray to its last stored count, read with the clock of
+    // the warp (VK_KHR_shader_clock, subgroup scope). A ray that finishes before others of its
+    // warp waits for them, so this is the cost the GPU pays for the ray. Counting variant only:
+    // it times the counting shader, so it is for looking, never a result.
+    public uint cycles;
+    public uint clockStart; // the clock when the ray started (low 32 bits); resume() needs it
 };
 
 // One step of the ray log, or its header (entry 0). The meaning of the fields depends on `kind`:

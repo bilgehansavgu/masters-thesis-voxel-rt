@@ -139,10 +139,29 @@ solid boxes. Docked areas sit around the image (drag a tab to rearrange them):
   list: *Show in Explorer*, *Remove from list* (the file stays; a file of `../Models` is back at the
   next start) or *Move to Recycle Bin...* (asks first). The model on screen cannot be removed.
 - *Encoding*: one switch per setting of the encodings (layout, mipmap), and the brick size.
-- *Rays*: the ray order (rows or tiles) and the camera presets of the benchmark plan (standard
-  x1, close x0.35, near x0.18).
-- *Search*: the tracer, with the memory of its search structure.
-- *Output*: the view, the light of the lit views, the colour scale of the count views.
+- *Rays*: the ray order (rows or tiles) and the kept cameras. They start as the cameras of the
+  benchmark plan (standard x1, close x0.35, near x0.18). **Keep view** adds the current camera under
+  a name; a right click renames a camera, moves it to the current view or deletes it; **Restore
+  defaults** brings back the three. A camera is kept relative to the scene (angles, distance
+  factor, target offset in scene radii), so it works on every model. Kept in
+  `%LOCALAPPDATA%/thesis_renderer/cameras.json`.
+- *Search*: the tracer, with the memory of its search structure. **A/B image** picks a second
+  tracer: the image then shows the selected tracer (A) left of a line and the second one (B) right
+  of it, from the same camera rays, in the same view and colour scale. Drag the line. Both trace in
+  every frame, so the window keeps no trace times meanwhile.
+- *Output*: the view, the light of the lit views, the colour scale of the count views. **Range,
+  automatic** (on at the start): the distance view spans the nearest to the farthest visible hit,
+  and a count view ends its colour map at the 99th percentile of the rays with work. A change by
+  hand switches it off, so the colours of two tracers compare. **Per warp, largest in the warp**:
+  each pixel of a count view shows the largest count of its warp (the 32 neighbouring rays of the
+  ray list that the GPU runs together); the warp is busy until its slowest ray is done. Not for the
+  ray tracing pipeline tracers: the driver decides which rays share a warp.
+
+The bar in the top left corner of the image opens or folds the three windows (a window's close
+button folds it too); **Image only (F)** folds them all, F again opens them. **Save (P)** writes
+the frame as a PNG with its legend (as `--screenshot` does) and a `.txt` with the command that
+renders it again, into the folder of the last image (first `Pictures/thesis_renderer`); with A/B on
+it also writes the B image. **Save as...** asks for the file.
 
 **Image** (middle). Every view whose colours stand for values has its legend on the image: a
 colour bar with ticks for the count views and for the distance, named colour boxes for the two
@@ -163,7 +182,12 @@ the window reads the distance to the surface of each pixel once each time the ca
 
 - *Timing*: quick live timing of every tracer at this camera (key M) and the stages of the frame
   on screen. Window numbers, not thesis numbers.
-- *Work per ray*: the average work of a ray in the frame, with a work view on.
+- *Work per ray*: the work of the rays in the frame, with a work view on: the mean over all rays
+  and over the rays with a hit, the 99th percentile, the most, and the warp use (the work of all
+  rays divided by the work their warps were busy for; 100 % means no ray waited for another). The
+  arrow of a row opens the inspector on the ray with the most. A click on a row shows its
+  histogram: rays per count, one bar per power of two, rays with and without a hit stacked, the
+  height on a log scale.
 - *Compare view*: the benchmark protocol twice at the current camera (mipmap off/on, or a second
   tracer) on one frozen buffer of camera rays. Both runs get the same rays, and the hits are
   compared with the rule of the agreement test. Both results files are saved together. **Show**
@@ -179,7 +203,8 @@ the ray order, the camera, the tracer, the view and the trace time.
 
 In the window: left-drag to orbit, scroll to zoom. Hold the right button to fly: the mouse turns
 the view, **W/A/S/D** move, **Q/E** go down and up, **Shift** is faster, scrolling sets the speed. **Tab** switches the tracer, **E** the encoding,
-**B** the brick size (with Shift: the one before), **1-9, 0, -, =** the view. **M** measures
+**B** the brick size (with Shift: the one before), **1-9, 0, -, =, C** the view. **F** folds every
+window (image only), **P** saves the image. **M** measures
 every tracer at the current camera ("Quick timing"), **R** resets the camera. **S** shows the
 search structure, the **arrow keys** step along a picked ray, **V** shows it from the side. A **right click**
 (without moving the mouse) on the image starts the ray inspector on that pixel, **Esc** stops it. The panel shows the size
@@ -199,6 +224,7 @@ panel always belong to what is on screen.
 | 0 | Steps through the tracer's own search structure (the hardware tracers cannot count them) |
 | - | Mipmap cells read |
 | = | The largest mipmap square that the walk skipped: blue 2x2 cells, green 4x4, yellow 8x8, orange 16x16, red 32x32 |
+| C | GPU clock cycles of the ray, read with the clock of its warp: where the time goes, for every compute shader tracer that counts work (the ray query hardware tracer too), not for ray tracing pipeline tracers (after TraceRay a ray may run on another SM, whose clock differs). From the counting shader: for looking, never a thesis number |
 
 Work views and the frame that captures a selected pixel run the counting shader. Exploring the
 saved ray uses its recorded events. The comparison table only accepts ordinary trace frames. With a
@@ -211,10 +237,10 @@ the hit. "Copy as text" puts the list on the clipboard. The hardware tracers can
 nodes of its BVH, so its list starts at the primitives.
 
 `--benchmark` is headless and writes `results/<time>_<tracer>[_<encoding>].json`.
-`--screenshot <file.png>` is headless too: it writes one frame, with `--view <1-12>`. A view
-with a legend (2, 6 to 12) gets it in a strip below the image, as in the window. Count views
-(6, 7, 8, 10, 11): viridis, black for 0, white above `--scale-max <count>` (default 64), linear
-or with `--log-scale` log2. With
+`--screenshot <file.png>` is headless too: it writes one frame, with `--view <1-13>`. A view
+with a legend (2, 6 to 13) gets it in a strip below the image, as in the window. Count views
+(6, 7, 8, 10, 11, 13): viridis, black for 0, white above `--scale-max <count>` (default 64, for view 13 20000), linear
+or with `--log-scale` log2; `--warp-max` shows the largest count of each warp. With
 `--inspect <x> <y>` it also prints every step of the ray of that pixel. In the window,
 `--inspect` starts the ray inspector on that pixel. `--brick-size 8|16|32` regroups the voxels
 into bricks of that size before the encoding.
@@ -223,8 +249,9 @@ distance as a factor of the distance that shows the whole scene. For the benchma
 start and the radius of the orbit. `--exact-camera <x> <y> <z> <yaw> <pitch> <distance>` sets the
 camera as the window has it (target, angles, distance), as "Copy as command" writes it.
 `--light <azimuth> <elevation>` (degrees) moves the light of views 1 and 5, `--distance-range
-<near> <far>` sets the range of view 2. `--view`, `--scale-max`, `--log-scale` and `--light` set
-the start of the window too.
+<near> <far>` sets the range of view 2. `--view`, `--scale-max`, `--log-scale`, `--light` and
+`--distance-range` set the start of the window too; a range given this way turns the window's
+automatic ranges off, so the window shows what the command says.
 `--ray-order rows|tiles` sets where the ray of each pixel sits in the ray list. The GPU traces
 32 neighbouring rays of the list together. With `rows` (the default) these are 32 pixels of one
 row; with `tiles` they are a tile of 8 x 4 pixels. The image is the same either way; only the
@@ -254,7 +281,13 @@ The counting variant (`<shader>.counting.spv`, compiled with `THESIS_COUNT_WORK`
 hits and also writes, for each ray, how many primitives it was tested against, how many steps it
 took through the tracer's own search structure, how many cells of primary grids and mipmap cells
 it visited (and how many mipmap squares it skipped, and at which levels), how many runs it was
-tested against, and the kind of the cell with the hit. For one ray that the caller names, it also
+tested against, the kind of the cell with the hit, and the GPU clock cycles from its start to its
+end (`VK_KHR_shader_clock`, clock of the warp: a ray that finishes early waits for the slowest ray
+of its warp). The cycles time the counting shader, so they show where the time goes, never a
+result. A tracer whose rays may move to another SM during the trace (every ray tracing pipeline:
+Vulkan may repack the invocations at TraceRay, with or without shader execution reordering)
+reports no cycles (`ITracer::countsCycles`): the SM clocks differ, so the difference is not valid.
+The results file then has `null` for the cycles, as for any counter a tracer does not report. For one ray that the caller names, it also
 writes every step to the ray log (`shared/include/thesis/shared/RayLog.h`, at most 4,095 steps).
 In the timed variant the counter struct is empty, so counting costs it nothing
 (`shaders/common/work.slang`). A test checks that the ray log of a ray agrees with its counters

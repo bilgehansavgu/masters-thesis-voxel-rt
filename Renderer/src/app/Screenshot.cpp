@@ -2,17 +2,20 @@
 
 #include "FramePipeline.h"
 #include "Gui.h"
+#include "PathText.h"
 #include "RayLogText.h"
 #include "SceneSetup.h"
 
 #include "thesis/gpu/Context.h"
 #include "thesis/gpu/Image.h"
+#include "thesis/resolve/ViewSupport.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -36,7 +39,19 @@ RenderedFrame renderFrame(const gpu::Context& context, const Options& options)
     FramePipeline pipeline(context, options.shaderDirectory, {options.width, options.height},
                            static_cast<tracing::RayOrder>(options.rayOrder));
     const core::OrbitCamera camera = startCamera(options, built.scene.bounds);
-    frame.shading = startShading(options, camera);
+    frame.shading = startShading(options, camera, context.info().subgroupSize);
+    // No silent fallback: a view this tracer or scene cannot show is an error, as in the window.
+    const resolve::ViewSupport support{
+        tracer->countsWork(), tracer->countsStructureSteps(), tracer->countsCycles(), built.voxels > 0,
+        !built.encoding.empty() && source.encodings().at(source.encodingIndex(built.encoding)).skipsEmptySpace};
+    if (const char* reason = resolve::unavailableView(frame.shading.mode, support)) {
+        const char* view = resolve::kShadingModeNames.at(static_cast<std::size_t>(frame.shading.mode));
+        throw std::invalid_argument(std::string("--view '") + view + "' with tracer '" + frame.tracer + "': " + reason);
+    }
+    if (frame.shading.warpSize > 0 && !tracer->warpsFollowRayList()) {
+        throw std::invalid_argument("--warp-max: tracer '" + frame.tracer +
+                                    "' does not place the rays of the list on warps in order");
+    }
 
     const bool inspect = options.inspect.size() == 2;
     if (inspect) {
@@ -66,6 +81,32 @@ RenderedFrame renderFrame(const gpu::Context& context, const Options& options)
     return frame;
 }
 
+void writeFigure(const resolve::RgbaImage& frame, const resolve::ShadingParams& shading,
+                 const std::filesystem::path& file)
+{
+    resolve::RgbaImage image = frame;
+    const resolve::ViewLegend legend = resolve::legendFor(shading);
+    if (!legend.empty()) {
+        const std::filesystem::path font =
+            std::filesystem::is_regular_file(kInterfaceFontFile) ? kInterfaceFontFile : std::filesystem::path{};
+        image = resolve::withLegend(image, legend, font);
+    }
+    const std::string text = utf8(file);
+    // WHY stbi_write_png_to_func: stbi_write_png opens the file with a narrow path, which fails
+    // for characters outside the code page of Windows.
+    std::ofstream out(file, std::ios::binary);
+    const int written =
+        out && stbi_write_png_to_func(
+                   [](void* context, void* data, int size) {
+                       static_cast<std::ofstream*>(context)->write(static_cast<const char*>(data), size);
+                   },
+                   &out, static_cast<int>(image.width), static_cast<int>(image.height), 4, image.pixels.data(),
+                   static_cast<int>(image.width) * 4);
+    if (written == 0 || !out) {
+        throw std::runtime_error("Cannot write '" + text + "'");
+    }
+}
+
 int runScreenshot(const Options& options)
 {
     gpu::ContextOptions contextOptions;
@@ -79,20 +120,9 @@ int runScreenshot(const Options& options)
                     frame.log->ray, frame.logText.c_str());
     }
 
-    resolve::RgbaImage image = frame.image;
     const resolve::ShadingParams& shading = frame.shading;
-    const resolve::ViewLegend legend = resolve::legendFor(shading);
-    if (!legend.empty()) {
-        const std::filesystem::path font =
-            std::filesystem::is_regular_file(kInterfaceFontFile) ? kInterfaceFontFile : std::filesystem::path{};
-        image = resolve::withLegend(image, legend, font);
-    }
-    const std::string file = options.screenshot.string();
-    const int written = stbi_write_png(file.c_str(), static_cast<int>(image.width), static_cast<int>(image.height), 4,
-                                       image.pixels.data(), static_cast<int>(image.width) * 4);
-    if (written == 0) {
-        throw std::runtime_error("Cannot write '" + file + "'");
-    }
+    writeFigure(frame.image, shading, options.screenshot);
+    const std::string file = utf8(options.screenshot);
     std::printf("%s: %s, tracer %s%s%s, view %s\n", file.c_str(), frame.sceneName.c_str(), frame.tracer.c_str(),
                 frame.encoding.empty() ? "" : ", encoding ", frame.encoding.c_str(),
                 resolve::kShadingModeNames.at(options.view - 1));

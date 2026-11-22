@@ -1,5 +1,7 @@
 #include "CommandLine.h"
 
+#include "PathText.h"
+
 #include "thesis/shared/RayOrder.h"
 
 #include <CLI/CLI.hpp>
@@ -22,7 +24,7 @@ std::string number(float value)
 
 std::string pathText(const std::filesystem::path& path)
 {
-    return path.generic_string();
+    return utf8Generic(path);
 }
 
 } // namespace
@@ -43,11 +45,13 @@ ParsedCommand parseCommandLine(const std::vector<std::string>& arguments)
     cli.add_option("--open-result", options.openResult, "Reopen the scene and pose of a fixed-view benchmark")
         ->check(CLI::ExistingFile);
     cli.add_option("--screenshot", options.screenshot, "Write one frame to this PNG file, without a window");
-    cli.add_option("--view", options.view, "The view, numbered as in the panel of the window: 1 to 12")
-        ->check(CLI::Range(1, 12));
+    cli.add_option("--view", options.view, "The view, numbered as in the panel of the window: 1 to 13")
+        ->check(CLI::Range(1, 13));
     cli.add_option("--scale-max", options.scaleMaximum,
                    "Count views: the count at the end of the colour map; a larger count is white")
-        ->check(CLI::Range(1.0f, 4096.0f));
+        ->check(CLI::Range(1.0f, 1e9f));
+    cli.add_flag("--warp-max", options.warpMaximum,
+                 "Count views: each pixel shows the largest count of its warp (the rays the GPU runs together)");
     cli.add_flag("--log-scale", options.logScale, "Count views: log2 colour scale instead of linear");
     cli.add_option("--light", options.light, "Lit views: azimuth and elevation of the light in degrees")->expected(2);
     cli.add_option("--distance-range", options.distanceRange,
@@ -183,11 +187,14 @@ std::vector<std::string> commandArguments(const Options& options, CommandForm fo
         if (options.view != defaults.view) {
             add({"--view", std::to_string(options.view)});
         }
-        if (options.scaleMaximum != defaults.scaleMaximum) {
-            add({"--scale-max", number(options.scaleMaximum)});
+        if (options.scaleMaximum) {
+            add({"--scale-max", number(*options.scaleMaximum)});
         }
         if (options.logScale) {
             add({"--log-scale"});
+        }
+        if (options.warpMaximum) {
+            add({"--warp-max"});
         }
         if (options.light.size() == 2) {
             add({"--light", number(options.light[0]), number(options.light[1])});

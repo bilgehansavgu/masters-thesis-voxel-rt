@@ -1,5 +1,7 @@
 #include "thesis/tracing/RayLogBuffer.h"
 
+#include "thesis/gpu/Context.h"
+
 #include <algorithm>
 #include <cstring>
 
@@ -25,27 +27,26 @@ void memoryBarrier(VkCommandBuffer cmd, VkPipelineStageFlags2 sourceStage, VkAcc
 } // namespace
 
 RayLogBuffer::RayLogBuffer(const gpu::Context& context)
-    : gpuBuffer_(context, kLogBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, gpu::MemoryUsage::DeviceLocal),
+    : shaderStages_(context.storageShaderStages()),
+      gpuBuffer_(context, kLogBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, gpu::MemoryUsage::DeviceLocal),
       cpuCopy_(context, kLogBytes, 0, gpu::MemoryUsage::Readback)
 {}
 
 void RayLogBuffer::request(VkCommandBuffer cmd, std::uint32_t ray) const
 {
     // The shader of the frame before may still read or write the header.
-    memoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                  VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+    memoryBarrier(cmd, shaderStages_, VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                   VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
     const core::RayLogEntry header{ray, 0, 0, 0, 0, 0, 0, 0.0f};
     vkCmdUpdateBuffer(cmd, gpuBuffer_.handle(), 0, sizeof(header), &header);
-    memoryBarrier(cmd, VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                  VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+    memoryBarrier(cmd, VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, shaderStages_,
                   VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
 }
 
 void RayLogBuffer::copyBack(VkCommandBuffer cmd) const
 {
-    memoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                  VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+    memoryBarrier(cmd, shaderStages_, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
+                  VK_ACCESS_2_TRANSFER_READ_BIT);
     const VkBufferCopy region{0, 0, kLogBytes};
     vkCmdCopyBuffer(cmd, gpuBuffer_.handle(), cpuCopy_.handle(), 1, &region);
     memoryBarrier(cmd, VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,

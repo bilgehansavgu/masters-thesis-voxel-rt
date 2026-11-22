@@ -18,14 +18,7 @@ public struct ClosestHit
     // whether this is the ray of the ray log.
     public static ClosestHit none(Ray ray, uint rayIndex)
     {
-        ClosestHit closest;
-        closest.t = ray.tMax;
-        closest.primitive = kNoHit;
-        closest.hit.t = ray.tMax;
-        closest.hit.face = 0;
-        closest.hit.detail = 0;
-        closest.work = WorkCounter.start(rayIndex);
-        return closest;
+        return noHitYet(ray, WorkCounter.start(rayIndex));
     }
 
     // For a shader of a ray tracing pipeline that runs in the middle of a ray (an intersection
@@ -33,8 +26,21 @@ public struct ClosestHit
     // and the work so far is in the work list (WorkCounter.resume).
     public static ClosestHit resume(Ray ray, uint rayIndex)
     {
-        ClosestHit closest = none(ray, rayIndex);
-        closest.work = WorkCounter.resume(rayIndex);
+        // Not through none(): that would start a new count (a clock read and a ray log read)
+        // only to throw it away.
+        return noHitYet(ray, WorkCounter.resume(rayIndex));
+    }
+
+    // No hit yet: the ray reaches to its tMax, with the work counted so far.
+    static ClosestHit noHitYet(Ray ray, WorkCounter work)
+    {
+        ClosestHit closest;
+        closest.t = ray.tMax;
+        closest.primitive = kNoHit;
+        closest.hit.t = ray.tMax;
+        closest.hit.face = 0;
+        closest.hit.detail = 0;
+        closest.work = work;
         return closest;
     }
 

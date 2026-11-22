@@ -110,6 +110,14 @@ public:
     // (core::RayWork::structureSteps). The hardware tracer cannot: the GPU does not report the
     // nodes of its BVH.
     [[nodiscard]] virtual bool countsStructureSteps() const { return countsWork(); }
+    // True if the counting variant measures the GPU clock cycles of each ray
+    // (core::RayWork::cycles). False where the clock reads at the start and at the end of a ray
+    // are not comparable, e.g. when the GPU moves the ray to another thread in between.
+    [[nodiscard]] virtual bool countsCycles() const { return countsWork(); }
+    // True if ray i of the list runs on thread i, so that a warp traces neighbouring rays of the
+    // list (one warp = rays [k * warp size, (k + 1) * warp size)). The window groups the work of
+    // the rays by warp only then. A ray tracing pipeline may place rays on threads in its own way.
+    [[nodiscard]] virtual bool warpsFollowRayList() const { return true; }
     // DIAGNOSIS. A step through the search structure from the ray log (kind
     // THESIS_LOG_STRUCTURE_STEP) in a few words. a to d mean what the tracer's shader wrote there.
     [[nodiscard]] virtual std::string describeStructureStep(const core::RayLogEntry& step) const

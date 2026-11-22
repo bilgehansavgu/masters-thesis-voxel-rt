@@ -25,6 +25,7 @@
 #include <format>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -44,9 +45,9 @@ struct TraceParams {
 };
 
 // What makes one of the three tracers: its name, its words, and the entry points of its pipeline.
+// The one-line description for the registry is in registerHardwarePipelineTracers.
 struct Variant {
     std::string name;
-    std::string description; // one line, for the registry
     tracing::TracerText text;
     std::string brickTest; // what the diagram calls a test of one primitive
     std::string shader;
@@ -58,7 +59,6 @@ struct Variant {
 Variant plainVariant()
 {
     return {"hardware_pipeline",
-            "Hardware pipeline: the RT cores walk the GPU's BVH; brick test in an intersection shader.",
             {"Hardware RT pipeline",
              "The ray tracing units search the BVH that the driver builds from the brick boxes, as in the hardware "
              "tracer. The rays run in a ray tracing pipeline: the GPU calls an intersection shader with the brick "
@@ -71,7 +71,6 @@ Variant plainVariant()
 Variant reorderAfterHitVariant()
 {
     return {"hardware_pipeline_reorder_hit",
-            "Hardware pipeline with shader execution reordering by hit, after the brick tests.",
             {"Hardware RT pipeline, reorder after hit",
              "As the hardware RT pipeline. After the search, the GPU regroups the rays by their hit (shader "
              "execution reordering) before the closest-hit shader reads the hit. The brick tests run during the "
@@ -85,7 +84,6 @@ Variant reorderAfterHitVariant()
 Variant reorderBeforeBrickTestVariant()
 {
     return {"hardware_pipeline_reorder_box",
-            "Hardware pipeline: the BVH walk finds the first box, rays are regrouped by box, then the brick test.",
             {"Hardware RT pipeline, reorder by brick",
              "The ray tracing units only find the brick box that the ray enters first. The GPU regroups the rays "
              "by that box (shader execution reordering), then each ray runs the brick test, so rays in the same "
@@ -129,7 +127,13 @@ public:
         if (variant_.needsDisjointBoxes) {
             const auto start = std::chrono::steady_clock::now();
             const std::vector<core::Aabb> boxes = scene.downloadPrimitiveBounds(context_);
-            const tracing::GridFrame frame = tracing::chooseGridFrame(boxes.size(), scene.bounds, scene.primitiveGrid);
+            tracing::GridFrame frame;
+            try {
+                frame = tracing::chooseGridFrame(boxes.size(), scene.bounds, scene.primitiveGrid);
+            } catch (const std::length_error& reason) {
+                throw tracing::UnsupportedScene(std::string("The check that no two boxes overlap needs a grid: ") +
+                                                reason.what());
+            }
             const std::optional<BoxOverlap> overlap = findBoxOverlap(boxes, frame);
             report.cpuMilliseconds =
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
@@ -153,6 +157,17 @@ public:
     bool countsWork() const override { return true; }
     // The GPU does not report the nodes of its BVH.
     bool countsStructureSteps() const override { return false; }
+    // WHY no cycles: they come from the clock of the subgroup (work.slang), read in ray generation
+    // before TraceRay and in a later shader of the same ray. TraceRay is an invocation repack
+    // instruction in Vulkan: after it the ray may run in another subgroup, on an SM whose clock
+    // runs with another offset, and a constant offset does not show as a wrap. With reordering
+    // this was measured on Lucy 2048 at 512 x 512: p99 near 2^32 (a difference below zero that
+    // wrapped). Without reordering p99 was a sane 0.2 million cycles, but the specification
+    // does not promise that, so no variant of a ray tracing pipeline reports cycles.
+    bool countsCycles() const override { return false; }
+    // WHY false: the driver decides which launch indices share a warp, and the reordering variants
+    // regroup the threads during the trace.
+    bool warpsFollowRayList() const override { return false; }
 
     void traceCounting(VkCommandBuffer cmd, const tracing::RayBatch& batch, const tracing::WorkOutput& work) override
     {
@@ -175,14 +190,11 @@ private:
     tracing::BoxBvh bvh_;
 };
 
-void add(tracing::TracerRegistry& registry, Variant variant)
+tracing::TracerRegistry::Factory factoryOf(Variant (*variant)())
 {
-    std::string name = variant.name;
-    std::string description = variant.description;
-    registry.add(std::move(name), std::move(description),
-                 [variant = std::move(variant)](const tracing::TracerEnvironment& environment) {
-                     return std::make_unique<HardwarePipelineTracer>(environment, variant);
-                 });
+    return [variant](const tracing::TracerEnvironment& environment) {
+        return std::make_unique<HardwarePipelineTracer>(environment, variant());
+    };
 }
 
 } // namespace
@@ -190,11 +202,19 @@ void add(tracing::TracerRegistry& registry, Variant variant)
 
 namespace thesis::plugins {
 
+// WHY each name is a literal in registry.add: scripts/check_architecture.py reads the plugin
+// names from these calls to keep them inside this folder.
 void registerHardwarePipelineTracers(tracing::TracerRegistry& registry)
 {
-    tracers::add(registry, tracers::plainVariant());
-    tracers::add(registry, tracers::reorderAfterHitVariant());
-    tracers::add(registry, tracers::reorderBeforeBrickTestVariant());
+    registry.add("hardware_pipeline",
+                 "Hardware pipeline: the RT cores walk the GPU's BVH; brick test in an intersection shader.",
+                 tracers::factoryOf(tracers::plainVariant));
+    registry.add("hardware_pipeline_reorder_hit",
+                 "Hardware pipeline with shader execution reordering by hit, after the brick tests.",
+                 tracers::factoryOf(tracers::reorderAfterHitVariant));
+    registry.add("hardware_pipeline_reorder_box",
+                 "Hardware pipeline: the BVH walk finds the first box, rays are regrouped by box, then the brick test.",
+                 tracers::factoryOf(tracers::reorderBeforeBrickTestVariant));
 }
 
 } // namespace thesis::plugins

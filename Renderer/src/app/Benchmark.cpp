@@ -1,13 +1,14 @@
 #include "Benchmark.h"
 
 #include "FramePipeline.h"
-#include "RayWorkSummary.h"
+#include "PathText.h"
 #include "SceneSetup.h"
 
 #include "thesis/core/GpuTypes.h"
 #include "thesis/core/Statistics.h"
 #include "thesis/gpu/Buffer.h"
 #include "thesis/gpu/Context.h"
+#include "thesis/metrics/RayWorkSummary.h"
 #include "thesis/metrics/Sinks.h"
 #include "thesis/metrics/SystemInfo.h"
 #include "thesis/profiling/Profiling.h"
@@ -78,7 +79,7 @@ nlohmann::json measureRayWork(const gpu::Context& context, FramePipeline& pipeli
     std::vector<core::RayWork> work(count);
     std::vector<core::Hit> hits(count);
 
-    RayWorkSummary summary;
+    metrics::RayWorkSummary summary;
     for (std::uint32_t view = 0; view < kWorkViews; ++view) {
         const core::CameraFrame camera = cameraAt(baseCamera, view, kWorkViews, pipeline.aspectRatio());
         context.submitAndWait([&](VkCommandBuffer cmd) {
@@ -90,10 +91,15 @@ nlohmann::json measureRayWork(const gpu::Context& context, FramePipeline& pipeli
         const std::vector<std::byte> hitBytes = gpu::downloadBuffer(context, pipeline.batch().hits);
         std::memcpy(work.data(), workBytes.data(), count * sizeof(core::RayWork));
         std::memcpy(hits.data(), hitBytes.data(), count * sizeof(core::Hit));
-        summary.add(work, hits);
+        summary.add(work, hits, tracer.warpsFollowRayList() ? context.info().subgroupSize : 0u);
     }
 
-    nlohmann::json result = summary.toJson();
+    std::vector<metrics::WorkCounter> unavailable;
+    if (!tracer.countsStructureSteps())
+        unavailable.push_back(metrics::WorkCounter::StructureSteps);
+    if (!tracer.countsCycles())
+        unavailable.push_back(metrics::WorkCounter::Cycles);
+    nlohmann::json result = summary.toJson(unavailable);
     result["note"] = "from the counting variant of the shader, not timed";
     result["views"] = kWorkViews;
     return result;
@@ -304,7 +310,7 @@ static int benchmark(const Options& options, ViewComparison* comparison = nullpt
                                  {"yaw", baseCamera.yawDegrees},
                                  {"pitch", baseCamera.pitchDegrees},
                                  {"fov", baseCamera.verticalFovDegrees}};
-        run["scene"]["model_path"] = options.model.empty() ? "" : std::filesystem::absolute(options.model).string();
+        run["scene"]["model_path"] = options.model.empty() ? "" : utf8(std::filesystem::absolute(options.model));
         run["scene"]["grid_size"] = options.gridSize;
         run["scene"]["seed"] = options.seed;
         run["prepare"] = {{"gpu_ms", prepared.gpuMilliseconds},
@@ -420,15 +426,11 @@ static int benchmark(const Options& options, ViewComparison* comparison = nullpt
                                              {"touching_primitive", same.primitiveMismatch},
                                              {"touching_attributes", same.attributeMismatch},
                                              {"max_relative_distance_error", same.maxRelativeDistanceError},
-                                             {"reference_report", comparison->rows.front().file.filename().string()}};
+                                             {"reference_report", utf8(comparison->rows.front().file.filename())}};
             }
         }
         if (tracer->countsWork()) {
             summary["ray_work"] = measureRayWork(context, pipeline, *tracer, baseCamera, options.fixedView);
-            if (!tracer->countsStructureSteps()) {
-                for (const char* group : {"mean_per_ray", "mean_per_ray_with_hit", "max_per_ray"})
-                    summary["ray_work"][group]["structure_steps"] = nullptr;
-            }
         }
         sinks.endRun(summary);
         if (comparison) {
@@ -462,7 +464,7 @@ static int benchmark(const Options& options, ViewComparison* comparison = nullpt
                 std::printf("           the timed shader uses %.0f registers per thread\n", statistic.value);
             }
         }
-        std::printf("           -> %s\n", fileSink.path().string().c_str());
+        std::printf("           -> %s\n", utf8(fileSink.path()).c_str());
 
         if (tracer->findsHits()) {
             tracerMedians.emplace_back(tracerName, medianMs);
@@ -562,8 +564,13 @@ void restoreResult(Options& options)
     options.fixedView = true;
     options.width = config.at("width");
     options.height = config.at("height");
+    // Written since the ray orders exist; an older file traced in rows.
+    const std::string rayOrder = config.value("ray_order", std::string("rows"));
+    if (rayOrder != "rows" && rayOrder != "tiles")
+        throw std::invalid_argument("Unknown ray order '" + rayOrder + "' in " + utf8(options.openResult));
+    options.rayOrder = rayOrder == "tiles" ? THESIS_RAY_ORDER_TILES : THESIS_RAY_ORDER_ROWS;
     const auto& scene = run.at("scene");
-    options.model = scene.at("model_path").get<std::string>();
+    options.model = pathFromUtf8(scene.at("model_path").get<std::string>());
     options.boxExample = options.model.empty();
     options.seed = scene.at("seed");
     options.gridSize = scene.at("grid_size");

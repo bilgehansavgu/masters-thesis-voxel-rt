@@ -45,10 +45,17 @@ public:
     // rebuilt first (resize); the caller then skips this frame.
     [[nodiscard]] std::optional<VkCommandBuffer> beginFrame();
 
+    // A second image of the same size, shown right of a vertical line (the A/B comparison).
+    struct Split {
+        gpu::StorageImage& right;
+        float at = 0.5f; // where the line is: 0 left edge, 1 right edge of the picture
+    };
+
     // Copies `image` into `area` of the window (keeping its aspect ratio; an empty area is the whole
-    // window), lets `overlay` draw on top, then submits and presents. Returns true if the window was
-    // rebuilt afterwards.
-    bool present(gpu::StorageImage& image, PixelRect area, const Overlay& overlay);
+    // window), lets `overlay` draw on top, then submits and presents. With `split`, the part right
+    // of the line comes from split->right. Returns true if the window was rebuilt afterwards.
+    bool present(gpu::StorageImage& image, PixelRect area, const Overlay& overlay,
+                 const std::optional<Split>& split = std::nullopt);
 
     [[nodiscard]] VkFormat format() const { return swapchain_.format(); }
     [[nodiscard]] std::uint32_t imageCount() const { return swapchain_.imageCount(); }

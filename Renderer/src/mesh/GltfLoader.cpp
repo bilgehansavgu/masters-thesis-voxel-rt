@@ -3,13 +3,16 @@
 #define CGLTF_IMPLEMENTATION
 #include <cgltf.h>
 
+#include <glm/mat3x3.hpp>
 #include <glm/mat4x4.hpp>
+#include <glm/matrix.hpp>
 #include <glm/vec4.hpp>
 
 #include <cstring>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace thesis::mesh {
 namespace {
@@ -85,7 +88,12 @@ public:
             }
             corners[i] = first + static_cast<std::uint32_t>(index);
         }
+        // A transform with a negative determinant mirrors the mesh, which turns every triangle the
+        // other way round: two corners swap so that the front stays the front.
+        const bool mirrored = glm::determinant(glm::mat3(transform)) < 0.0f;
         const auto add = [&](std::uint32_t a, std::uint32_t b, std::uint32_t c) {
+            if (mirrored)
+                std::swap(b, c);
             mesh_.indices.insert(mesh_.indices.end(), {a, b, c});
         };
         if (primitive.type == cgltf_primitive_type_triangles) {

@@ -3,7 +3,7 @@
 // are in trace_pipeline.slang and trace_pipeline_reorder.slang, because Slang only compiles entry
 // points of the file it is given.
 //
-// One ray runs in several shaders here, one after the other on the same thread: ray generation,
+// One ray runs in several shaders here, one after the other: ray generation,
 // then the intersection shader for every box the GPU's BVH walk reaches, then the closest-hit
 // shader (or the miss shader). The brick test is the same ClosestHit.test that every tracer runs.
 

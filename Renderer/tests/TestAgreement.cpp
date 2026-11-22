@@ -15,6 +15,7 @@
 #include "thesis/tracers/BuiltInTracers.h"
 #include "thesis/tracing/Bindings.h"
 #include "thesis/tracing/GpuScene.h"
+#include "thesis/tracing/GridFrame.h"
 #include "thesis/tracing/RayBatch.h"
 #include "thesis/tracing/Tracer.h"
 #include "thesis/voxel/Voxelizer.h"
@@ -196,6 +197,42 @@ TEST_CASE("tracers return hand-computed hits", "[gpu][known-answer]")
                 CHECK(hits[i].face == expected.face);
             }
         }
+    }
+
+    CHECK(gpu::validationMessageCount() == validationBefore);
+}
+
+// A tracer that cannot do a scene says so with UnsupportedScene; any other exception would stop
+// the window and the benchmark from loading the scene for every tracer. The scene's grid hint is
+// valid (each box lies in one cell) but larger than tracing::kMaxCellsPerAxis along x.
+TEST_CASE("tracers refuse a scene they cannot do only with UnsupportedScene", "[gpu]")
+{
+    const gpu::Context context(tests::testContextOptions("Thesis unsupported scene test"));
+    const std::uint64_t validationBefore = gpu::validationMessageCount();
+
+    core::Scene scene;
+    scene.name = "two boxes on a grid too large";
+    scene.primitiveKind = "box";
+    scene.primitiveBounds = {core::Aabb{{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}},
+                             core::Aabb{{3.0f, 0.0f, 0.0f}, {4.0f, 1.0f, 1.0f}}};
+    for (const core::Aabb& box : scene.primitiveBounds) {
+        scene.bounds.extend(box);
+    }
+    scene.primitiveGrid = core::RegularGrid{{0.0f, 0.0f, 0.0f}, 1.0f, {tracing::kMaxCellsPerAxis + 1, 1, 1}};
+    const tracing::GpuScene gpuScene = tracing::GpuScene::upload(context, scene);
+
+    tracing::TracerRegistry registry;
+    plugins::registerBuiltInTracers(registry);
+    const tracing::TracerEnvironment environment{context, THESIS_DEFAULT_SHADER_DIR};
+    for (const std::string& name : registry.names()) {
+        INFO("tracer " << name);
+        const auto tracer = registry.create(name, environment);
+        CHECK_NOTHROW([&] {
+            try {
+                (void)tracer->prepare(gpuScene);
+            } catch (const tracing::UnsupportedScene&) {
+            }
+        }());
     }
 
     CHECK(gpu::validationMessageCount() == validationBefore);

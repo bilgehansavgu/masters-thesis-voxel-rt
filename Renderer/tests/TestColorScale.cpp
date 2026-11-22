@@ -90,6 +90,8 @@ TEST_CASE("colour scale ticks are round counts inside the map", "[resolve]")
     CHECK(tickValues({3.0f, resolve::ScaleKind::Linear}) == Values{1, 2, 3});
     CHECK(tickValues({64.0f, resolve::ScaleKind::Log2}) == Values{1, 2, 4, 8, 16, 32, 64});
     CHECK(tickValues({1024.0f, resolve::ScaleKind::Log2}) == Values{1, 4, 16, 64, 256, 1024});
+    // A scale as large as a 32-bit count still has at most seven ticks.
+    CHECK(tickValues({4.0e9f, resolve::ScaleKind::Log2}).size() <= 7);
 
     const std::vector<resolve::ScaleTick> ticks = resolve::ColorScale{64.0f, resolve::ScaleKind::Log2}.ticks();
     CHECK(ticks[3].label == "8");

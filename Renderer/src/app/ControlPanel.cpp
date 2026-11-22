@@ -4,10 +4,13 @@
 
 #include "ControlPanel.h"
 
+#include "FileDialog.h"
 #include "FramePipeline.h"
 #include "PanelWidgets.h"
+#include "PathText.h"
 
 #include "thesis/core/Statistics.h"
+#include "thesis/resolve/ViewSupport.h"
 #include "thesis/shared/RayLog.h"
 #include "thesis/shared/RayOrder.h"
 
@@ -17,7 +20,12 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
+#include <format>
+#include <limits>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -52,6 +60,8 @@ ControlPanel::ControlPanel(PanelFacts facts, const core::OrbitCamera& initialCam
 {
     if (unavailableView(shading_.mode))
         shading_.mode = ShadingMode::Shaded;
+    if (const std::optional<WorkCounter> counter = counterOf(shading_.mode))
+        histogramCounter_ = *counter;
     rememberEncodingSize();
 }
 
@@ -83,7 +93,7 @@ WindowState ControlPanel::windowState() const
     state.rayOrder = facts_.rayOrder;
     state.camera = camera_;
     state.cameraPreset = cameraPreset_;
-    state.shading = shading_;
+    state.shading = shading();
     state.inspectedPixel = inspectedPixel_;
     return state;
 }
@@ -166,6 +176,11 @@ void ControlPanel::rayOrderChanged(std::uint32_t order)
     facts_.rayOrder = order;
     wantedRayOrder_ = order;
     depthVersion_ = 0;
+    // The summary names its costliest ray by its index in the old ray list: it goes, and the
+    // next one comes with the next counted frame.
+    workSummary_.reset();
+    workSummaryTime_ = {};
+    finishedFrame_.reset(); // its buffers belonged to the old frame pipeline
     // Another order can be faster or slower: the old times belong to the old order.
     traceTimes_.assign(facts_.tracers.size(), {});
     traceMs_ = {};
@@ -177,18 +192,49 @@ void ControlPanel::selectRayOrder(std::uint32_t order)
         wantedRayOrder_ = order;
 }
 
-void ControlPanel::selectCameraPreset(std::size_t index)
+void ControlPanel::selectBookmark(std::size_t index)
 {
-    if (measuring())
+    if (measuring() || index >= bookmarks_.list().size())
         return;
-    const CameraPreset& preset = kCameraPresets.at(index);
+    const CameraBookmark& bookmark = bookmarks_.list()[index];
     stopInspecting();
-    camera_ = core::OrbitCamera::framing(facts_.sceneBounds);
-    camera_.yawDegrees = preset.camera[0];
-    camera_.pitchDegrees = preset.camera[1];
-    camera_.distance *= preset.camera[2];
+    camera_ = bookmark.cameraIn(facts_.sceneBounds);
     cameraMoved();
-    cameraPreset_ = preset.camera;
+    cameraPreset_ = bookmark.preset();
+    bookmark_ = bookmark.name;
+}
+
+void ControlPanel::saveBookmark(std::string name)
+{
+    if (name.empty())
+        name = bookmarks_.freeName();
+    try {
+        const CameraBookmark bookmark = CameraBookmark::of(name, camera_, facts_.sceneBounds);
+        bookmarks_.put(bookmark);
+        bookmark_ = name;
+        // The camera now stands at this bookmark, as after selectBookmark(): an orbit bookmark
+        // makes the benchmark command an orbit.
+        cameraPreset_ = bookmark.preset();
+        tellUser("Camera kept as \"" + name + "\"");
+    } catch (const std::exception& error) {
+        problem_ = error.what();
+    }
+}
+
+void ControlPanel::removeBookmark(std::size_t index)
+{
+    try {
+        if (index < bookmarks_.list().size() && bookmark_ == bookmarks_.list()[index].name)
+            bookmark_.reset();
+        bookmarks_.remove(index);
+        // The row being renamed keeps its bookmark: rows below the deleted one move up.
+        if (renaming_ && *renaming_ == index)
+            renaming_.reset();
+        else if (renaming_ && *renaming_ > index)
+            --*renaming_;
+    } catch (const std::exception& error) {
+        problem_ = error.what();
+    }
 }
 
 void ControlPanel::copyCommand(CommandForm form)
@@ -199,10 +245,24 @@ void ControlPanel::copyCommand(CommandForm form)
     ImGui::SetClipboardText(copiedCommand_.c_str());
 }
 
+void ControlPanel::sceneRebuilt(PanelFacts facts)
+{
+    const auto sameName = [](const PanelFacts::Tracer& a, const PanelFacts::Tracer& b) { return a.name == b.name; };
+    if (!std::equal(facts.tracers.begin(), facts.tracers.end(), facts_.tracers.begin(), facts_.tracers.end(),
+                    sameName)) {
+        setFacts(std::move(facts));
+        return;
+    }
+    facts_ = std::move(facts);
+    finishedFrame_.reset(); // its tracer objects are gone; the next frame reports again
+}
+
 void ControlPanel::setFacts(PanelFacts facts)
 {
     stopInspecting();
     const std::string previous = facts_.tracers.at(activeTracer_).name;
+    const std::optional<std::string> previousSplit =
+        splitTracer_ ? std::optional(facts_.tracers.at(*splitTracer_).name) : std::nullopt;
     facts_ = std::move(facts);
     if (const std::filesystem::path& shown = facts_.models.at(facts_.model); !shown.empty())
         rememberFile("models", shown);
@@ -211,6 +271,15 @@ void ControlPanel::setFacts(PanelFacts facts)
     const auto same = std::find_if(facts_.tracers.begin(), facts_.tracers.end(),
                                    [&](const PanelFacts::Tracer& tracer) { return tracer.name == previous; });
     activeTracer_ = same == facts_.tracers.end() ? 0 : static_cast<std::size_t>(same - facts_.tracers.begin());
+    // The tracer of the A/B image by name too; off if the new scene has no such tracer.
+    splitTracer_.reset();
+    if (previousSplit) {
+        const auto split =
+            std::find_if(facts_.tracers.begin(), facts_.tracers.end(),
+                         [&](const PanelFacts::Tracer& tracer) { return tracer.name == *previousSplit; });
+        if (split != facts_.tracers.end())
+            compareInImage(static_cast<std::size_t>(split - facts_.tracers.begin()));
+    }
     wantedModel_ = facts_.model;
     wantedEncoding_ = facts_.encoding;
     wantedBrickSize_ = facts_.brickSize;
@@ -222,10 +291,12 @@ void ControlPanel::setFacts(PanelFacts facts)
     traceTimes_.assign(facts_.tracers.size(), {});
     measurement_.reset();
     frameInFlight_.reset();
+    finishedFrame_.reset();
     traceMs_ = {};
     rayLog_.reset();
     rayLogLines_.clear();
     workSummary_.reset();
+    workSummaryTime_ = {};
     rememberEncodingSize();
     picking_ = std::exchange(pickAfterReload_, false);
 }
@@ -280,8 +351,15 @@ void ControlPanel::selectTracer(std::size_t index)
     stopInspecting();
     activeTracer_ = index;
     workSummary_.reset();
-    if (unavailableView(shading_.mode))
-        shading_.mode = ShadingMode::Shaded;
+    workSummaryTime_ = {}; // the new tracer's summary with its first counted frame
+    depthVersion_ = 0;     // the depth came from the hits of the previous tracer (none for a baseline)
+    if (splitTracer_ == index)
+        splitTracer_.reset();
+    if (const char* reason = unavailableView(shading_.mode)) {
+        tellUser(std::string(resolve::kShadingModeNames.at(static_cast<std::size_t>(shading_.mode))) +
+                 " is off: " + reason);
+        selectView(ShadingMode::Shaded);
+    }
     if (pixel && facts_.tracers.at(index).countsWork) {
         inspectPixel(pixel->first, pixel->second);
         if (keepObserver) {
@@ -295,25 +373,229 @@ void ControlPanel::selectTracer(std::size_t index)
 
 const char* ControlPanel::unavailableView(ShadingMode mode) const
 {
-    const auto& tracer = facts_.tracers.at(activeTracer_);
-    if (resolve::showsWork(mode) && !tracer.countsWork)
-        return "This tracer does not count work.";
-    if (mode == ShadingMode::WorkStructure && !tracer.countsStructureSteps)
-        return "This tracer does not report the steps of its search structure.";
-    if (!facts_.voxelCount &&
-        (mode == ShadingMode::Normal || mode == ShadingMode::Faces || mode == ShadingMode::WorkCells ||
-         mode == ShadingMode::WorkRuns || mode == ShadingMode::WorkHitCell))
-        return "Needs a voxel model.";
-    if ((mode == ShadingMode::WorkMipmap || mode == ShadingMode::WorkSkipLevel) &&
-        (facts_.encodings.empty() || !facts_.encodings.at(facts_.encoding).skipsEmptySpace))
-        return "Needs an encoding with a mipmap.";
-    return nullptr;
+    return unavailableViewFor(mode, activeTracer_);
+}
+
+const char* ControlPanel::unavailableViewFor(ShadingMode mode, std::size_t index) const
+{
+    const auto& tracer = facts_.tracers.at(index);
+    return resolve::unavailableView(
+        mode, {tracer.countsWork, tracer.countsStructureSteps, tracer.countsCycles, facts_.voxelCount > 0,
+               !facts_.encodings.empty() && facts_.encodings.at(facts_.encoding).skipsEmptySpace});
 }
 
 void ControlPanel::selectView(ShadingMode mode)
 {
-    if (!unavailableView(mode) && !measuring())
-        shading_.mode = mode;
+    if (measuring())
+        return;
+    if (const char* reason = unavailableView(mode)) {
+        tellUser(std::string(resolve::kShadingModeNames.at(static_cast<std::size_t>(mode))) + ": " + reason);
+        return;
+    }
+    switchScale(mode);
+    if (mode == ShadingMode::Distance && shading_.mode != mode && autoRanges_)
+        depthVersion_ = 0; // the automatic distance range is set when the depth comes
+    shading_.mode = mode;
+    if (const std::optional<WorkCounter> counter = counterOf(mode))
+        histogramCounter_ = *counter;
+}
+
+void ControlPanel::switchScale(ShadingMode mode)
+{
+    if (mode == shading_.mode)
+        return;
+    if (resolve::showsCount(shading_.mode))
+        scales_[shading_.mode] = shading_.workScale;
+    if (resolve::showsCount(mode)) {
+        const auto known = scales_.find(mode);
+        // A view not shown before starts at its default range (the automatic range follows when
+        // it is on), not at the range of the view before: cycles and cells differ a thousandfold.
+        if (known != scales_.end())
+            shading_.workScale = known->second;
+        else
+            shading_.workScale.maximum = resolve::defaultScaleMaximum(mode);
+    }
+}
+
+std::optional<WorkCounter> ControlPanel::counterOf(ShadingMode mode)
+{
+    switch (mode) {
+    case ShadingMode::WorkCells:
+        return WorkCounter::Cells;
+    case ShadingMode::WorkPrimitives:
+        return WorkCounter::PrimitiveTests;
+    case ShadingMode::WorkRuns:
+        return WorkCounter::Runs;
+    case ShadingMode::WorkStructure:
+        return WorkCounter::StructureSteps;
+    case ShadingMode::WorkMipmap:
+        return WorkCounter::MipmapCells;
+    case ShadingMode::WorkCycles:
+        return WorkCounter::Cycles;
+    default:
+        return std::nullopt;
+    }
+}
+
+void ControlPanel::tellUser(std::string message)
+{
+    notice_ = std::move(message);
+    noticeTime_ = std::chrono::steady_clock::now();
+}
+
+void ControlPanel::showWarpMaximum(bool on)
+{
+    shading_.warpSize = on ? facts_.warpSize : 0u;
+}
+
+bool ControlPanel::activeTracerWarps() const
+{
+    return facts_.tracers.at(activeTracer_).warpsFollowRays;
+}
+
+void ControlPanel::setAutoRanges(bool on)
+{
+    autoRanges_ = on;
+    if (on)
+        depthVersion_ = 0; // the distance range follows at the next frame
+}
+
+void ControlPanel::compareInImage(std::optional<std::size_t> index)
+{
+    if (index && (*index >= facts_.tracers.size() || *index == activeTracer_))
+        index.reset();
+    splitTracer_ = index;
+}
+
+std::optional<std::size_t> ControlPanel::splitTracer() const
+{
+    if (!splitTracer_ || measuring() || *splitTracer_ >= facts_.tracers.size() ||
+        unavailableViewFor(shading_.mode, *splitTracer_))
+        return std::nullopt;
+    return splitTracer_;
+}
+
+bool ControlPanel::imageWarps() const
+{
+    const std::optional<std::size_t> split = splitTracer();
+    return facts_.tracers.at(activeTracer_).warpsFollowRays && (!split || facts_.tracers.at(*split).warpsFollowRays);
+}
+
+resolve::ShadingParams ControlPanel::shadingFor(std::size_t tracer) const
+{
+    resolve::ShadingParams params = shading_;
+    // WHY both sides of the A/B image: they share one legend, so they must show the same quantity.
+    if (!facts_.tracers.at(tracer).warpsFollowRays || !imageWarps())
+        params.warpSize = 0;
+    return params;
+}
+
+bool ControlPanel::countWorkFor(std::size_t tracer) const
+{
+    return resolve::showsWork(shading_.mode) && facts_.tracers.at(tracer).countsWork && !measuring();
+}
+
+void ControlPanel::saveImage(std::optional<std::filesystem::path> file)
+{
+    // WHY not while Quick timing runs: its frames run the timed shader, which shows a work view as
+    // the shaded image, so the view's legend and command would label another picture.
+    if (!facts_.command || measuring())
+        return;
+    const bool named = file.has_value();
+    if (!file) {
+        // scene_tracer_view_time.png in the folder of the last image, else in Pictures.
+        std::filesystem::path folder = imageFolder_;
+        if (folder.empty()) {
+            const char* profile = std::getenv("USERPROFILE");
+            folder = profile ? std::filesystem::path(profile) / "Pictures" / "thesis_renderer"
+                             : std::filesystem::current_path() / "images";
+        }
+        const auto now = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now());
+        std::string view = resolve::kShadingModeNames.at(static_cast<std::size_t>(shading_.mode));
+        for (char& c : view)
+            c = std::isalnum(static_cast<unsigned char>(c)) ? static_cast<char>(std::tolower(c)) : '-';
+        const std::filesystem::path& model = facts_.models.at(facts_.model);
+        const std::string scene = model.empty() ? std::string("box-field") : utf8(model.stem());
+        file = folder / pathFromUtf8(std::format("{}_{}_{}_{:%Y%m%d-%H%M%S}.png", scene,
+                                                 facts_.tracers.at(activeTracer_).name, view, now));
+    }
+    const auto requestFor = [&](const std::filesystem::path& image) {
+        SaveImageRequest request;
+        request.file = image;
+        if (splitTracer()) {
+            request.second = image.parent_path() /
+                             pathFromUtf8(utf8(image.stem()) + "_B_" + facts_.tracers.at(*splitTracer_).name + ".png");
+        }
+        request.command = facts_.command(windowState(), CommandForm::Screenshot);
+        return request;
+    };
+    const auto exists = [](const std::filesystem::path& path) {
+        std::error_code error;
+        return std::filesystem::exists(path, error);
+    };
+    const auto anyExists = [&](const SaveImageRequest& request) {
+        const std::vector<std::filesystem::path> files = request.files();
+        return std::any_of(files.begin(), files.end(), exists);
+    };
+    SaveImageRequest request = requestFor(*file);
+    if (!named) {
+        // WHY a number: the name has the time in seconds, so two saves in one second share it.
+        const std::string stem = utf8(file->stem());
+        for (std::uint32_t number = 2; anyExists(request); ++number)
+            request = requestFor(file->parent_path() / pathFromUtf8(std::format("{}_{}.png", stem, number)));
+    } else if (!exists(request.file)) {
+        // The save dialog asked about the image only. Replacing an image replaces its own command
+        // and B image with it; a new image must not write over a file that belongs to something else.
+        for (const std::filesystem::path& written : request.files()) {
+            if (exists(written)) {
+                problem_ = "Save image: " + utf8(written) + " already exists; choose another name.";
+                saveRequest_.reset(); // "Save as..." asked for a default request first
+                return;
+            }
+        }
+    }
+    saveRequest_ = std::move(request);
+}
+
+void ControlPanel::imageSaved(const std::filesystem::path& file)
+{
+    imageFolder_ = file.parent_path();
+    tellUser("Saved " + utf8(file.filename()));
+}
+
+void ControlPanel::fold(PanelWindow window, bool folded)
+{
+    folded_.at(static_cast<std::size_t>(window)) = folded;
+}
+
+void ControlPanel::toggleImageOnly()
+{
+    const bool allFolded = std::all_of(folded_.begin(), folded_.end(), [](bool f) { return f; });
+    folded_.fill(!allFolded);
+}
+
+bool ControlPanel::costliestIsCurrent() const
+{
+    return workSummary_ && workSummary_->rays() > 0 && workSummaryCameraVersion_ == cameraVersion_;
+}
+
+bool ControlPanel::inspectCostliest(WorkCounter counter)
+{
+    // WHY the camera check: the inspector traces the pixel from the camera of now; with a summary
+    // of an older camera it would show another ray than the one whose count the summary names.
+    if (!costliestIsCurrent())
+        return false;
+    const std::uint32_t ray = workSummary_->costliestRay(counter);
+    // WHY a search: the ray order is written once, as the pixel -> ray rule of RayOrder.h.
+    for (std::uint32_t y = 0; y < facts_.height; ++y) {
+        for (std::uint32_t x = 0; x < facts_.width; ++x) {
+            if (THESIS_RAY_INDEX(facts_.rayOrder, x, y, facts_.width, facts_.height) == ray) {
+                inspectPixel(x, y);
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 void ControlPanel::selectNextEncoding(int step)
@@ -380,6 +662,7 @@ void ControlPanel::inspectPixel(std::uint32_t x, std::uint32_t y)
 {
     if (x < facts_.width && y < facts_.height && facts_.tracers.at(activeTracer_).countsWork && !measuring()) {
         picking_ = false;
+        fold(PanelWindow::Inspector, false); // the walk of the ray is shown there
         comparison_.reset();
         observing_ = false;
         lesson_.reset();
@@ -420,14 +703,31 @@ std::optional<std::uint32_t> ControlPanel::loggedRay() const
 
 bool ControlPanel::wantsDepth() const
 {
-    return frameInFlight_ && frameInFlight_->cameraVersion == cameraVersion_ && depthVersion_ != cameraVersion_ &&
-           (structure_.visible() || lesson_.has_value()) && !measuring();
+    const bool autoDistance = autoRanges_ && shading_.mode == ShadingMode::Distance;
+    return finishedFrame_ && finishedFrame_->cameraVersion == cameraVersion_ &&
+           finishedFrame_->tracer == activeTracer_ && depthVersion_ != cameraVersion_ &&
+           (structure_.visible() || lesson_.has_value() || autoDistance) && !measuring();
 }
 
 void ControlPanel::recordDepth(DepthMap depth)
 {
     depth_ = std::move(depth);
-    depthVersion_ = frameInFlight_ ? frameInFlight_->cameraVersion : 0;
+    depthVersion_ = finishedFrame_ ? finishedFrame_->cameraVersion : 0;
+    if (autoRanges_ && shading_.mode == ShadingMode::Distance) {
+        // The range of the distance view: from the nearest to the farthest visible hit.
+        float nearest = std::numeric_limits<float>::infinity();
+        float farthest = 0.0f;
+        for (const float distance : depth_.distance) {
+            if (std::isfinite(distance)) {
+                nearest = std::min(nearest, distance);
+                farthest = std::max(farthest, distance);
+            }
+        }
+        if (std::isfinite(nearest)) {
+            shading_.distanceNear = nearest;
+            shading_.distanceFar = std::max(farthest, nearest * 1.001f + 1e-3f);
+        }
+    }
 }
 
 void ControlPanel::recordRayLog(std::optional<tracing::RayLog> log)
@@ -455,7 +755,10 @@ void ControlPanel::recordRayLog(std::optional<tracing::RayLog> log)
 
 bool ControlPanel::wantsWorkSummary() const
 {
-    return resolve::showsWork(shading_.mode) && !measuring() && facts_.tracers.at(activeTracer_).countsWork &&
+    // Only a frame of the active tracer that ran the counting shader left its work in the buffer;
+    // after any other frame (e.g. the last of Quick timing) the buffer holds older work.
+    return resolve::showsWork(shading_.mode) && !measuring() && finishedFrame_ && finishedFrame_->countedWork &&
+           finishedFrame_->tracer == activeTracer_ &&
            std::chrono::steady_clock::now() - workSummaryTime_ > std::chrono::seconds(1);
 }
 
@@ -463,6 +766,14 @@ void ControlPanel::recordWorkSummary(const RayWorkSummary& summary)
 {
     workSummary_ = summary;
     workSummaryTime_ = std::chrono::steady_clock::now();
+    workSummaryCameraVersion_ = finishedFrame_ ? finishedFrame_->cameraVersion : 0;
+    if (const std::optional<WorkCounter> counter = counterOf(shading_.mode); counter && autoRanges_) {
+        // The end of the colour map at the 99th percentile of the rays with work: the few rays
+        // above it show white, the rest spread over the map.
+        const double top = summary.percentile(*counter, 0.99);
+        if (top > 0.0)
+            shading_.workScale.maximum = static_cast<float>(std::max(1.0, std::ceil(top)));
+    }
 }
 
 void ControlPanel::fly(bool cameraFree)
@@ -518,7 +829,21 @@ void ControlPanel::handleInput()
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
         rightButtonFlew_ = false;
     }
-    if (!io.WantCaptureMouse) {
+    // The line of the A/B comparison: a left drag that starts on it moves it.
+    if (splitTracer() && facts_.width > 0) {
+        const FrameInWindow frame(facts_.width, facts_.height, imageMin_, imageMax_);
+        const float lineX = frame.left + splitAt_ * static_cast<float>(facts_.width) * frame.scale;
+        if (!io.WantCaptureMouse && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+            std::abs(io.MousePos.x - lineX) <= 6.0f && io.MousePos.y >= frame.top &&
+            io.MousePos.y <= frame.top + static_cast<float>(facts_.height) * frame.scale)
+            draggingSplit_ = true;
+        if (draggingSplit_ && ImGui::IsMouseDown(ImGuiMouseButton_Left))
+            splitAt_ =
+                std::clamp((io.MousePos.x - frame.left) / (static_cast<float>(facts_.width) * frame.scale), 0.0f, 1.0f);
+    }
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+        draggingSplit_ = false;
+    if (!io.WantCaptureMouse && !draggingSplit_) {
         const bool cameraFree = !inspectedPixel_ || lesson_.has_value();
         const bool leftDragged = !picking_ && !flying && ImGui::IsMouseDragging(ImGuiMouseButton_Left) &&
                                  (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f);
@@ -581,6 +906,12 @@ void ControlPanel::handleInput()
     if (ImGui::IsKeyPressed(ImGuiKey_S, false)) {
         structure_.show(!structure_.visible());
     }
+    if (ImGui::IsKeyPressed(ImGuiKey_F, false)) {
+        toggleImageOnly();
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_P, false)) {
+        saveImage();
+    }
     if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) {
         nextRayStep();
     }
@@ -615,13 +946,14 @@ void ControlPanel::recordTimings(const std::vector<gpu::StageTiming>& timings)
         }
     }
 
-    if (!frameInFlight_) {
+    finishedFrame_ = std::exchange(frameInFlight_, std::nullopt);
+    if (!finishedFrame_) {
         return;
     }
-    const FrameInFlight frame = *frameInFlight_;
-    frameInFlight_.reset();
+    const FrameInFlight frame = *finishedFrame_;
     // A frame that counted work ran the counting shader. Its time is not the time of the tracer.
-    if (frame.countedWork || frame.tracer >= traceTimes_.size() || trace <= 0.0) {
+    // Nor is the time of a frame that ran a second tracer for the A/B comparison.
+    if (frame.countedWork || frame.split || frame.tracer >= traceTimes_.size() || trace <= 0.0) {
         return;
     }
 
@@ -694,19 +1026,28 @@ void ControlPanel::drawDockLayout()
     ImGui::PopStyleVar(2);
 
     const ImGuiID dock = ImGui::GetID("layout");
-    if (!layoutBuilt_) {
-        // Fixed areas: settings left, inspector right, measurements under the image.
+    if (!layoutBuilt_ || layoutFolded_ != folded_) {
+        // Fixed areas: settings left, inspector right, measurements under the image. A folded
+        // window gets no area: the image takes its room. Built again when a window folds or opens.
         layoutBuilt_ = true;
+        layoutFolded_ = folded_;
         ImGui::DockBuilderRemoveNode(dock);
         ImGui::DockBuilderAddNode(dock, ImGuiDockNodeFlags_DockSpace);
         ImGui::DockBuilderSetNodeSize(dock, size);
         ImGuiID centre = dock;
-        const ImGuiID left = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Left, 0.21f, nullptr, &centre);
-        const ImGuiID right = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Right, 0.28f, nullptr, &centre);
-        const ImGuiID bottom = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, 0.27f, nullptr, &centre);
-        ImGui::DockBuilderDockWindow(kSettingsWindow, left);
-        ImGui::DockBuilderDockWindow(kInspectorWindow, right);
-        ImGui::DockBuilderDockWindow(kMeasurementsWindow, bottom);
+        if (!folded(PanelWindow::Settings)) {
+            const ImGuiID left = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Left, 0.21f, nullptr, &centre);
+            ImGui::DockBuilderDockWindow(kSettingsWindow, left);
+        }
+        if (!folded(PanelWindow::Inspector)) {
+            const float share = folded(PanelWindow::Settings) ? 0.23f : 0.28f; // the same width either way
+            const ImGuiID right = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Right, share, nullptr, &centre);
+            ImGui::DockBuilderDockWindow(kInspectorWindow, right);
+        }
+        if (!folded(PanelWindow::Measurements)) {
+            const ImGuiID bottom = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, 0.27f, nullptr, &centre);
+            ImGui::DockBuilderDockWindow(kMeasurementsWindow, bottom);
+        }
         ImGui::DockBuilderFinish(dock);
     }
     ImGui::DockSpace(dock, {0.0f, 0.0f}, ImGuiDockNodeFlags_PassthruCentralNode);
@@ -720,24 +1061,28 @@ void ControlPanel::drawDockLayout()
 void ControlPanel::draw()
 {
     drawDockLayout();
-    if (ImGui::Begin(kSettingsWindow)) {
-        drawSettings();
-    }
-    ImGui::End();
-    if (ImGui::Begin(kInspectorWindow)) {
-        drawInspector();
-    }
-    ImGui::End();
-    if (ImGui::Begin(kMeasurementsWindow)) {
-        drawMeasurements();
-    }
-    ImGui::End();
+    // Each window has a close button in its tab: it folds the window (the toolbar opens it again).
+    const auto window = [this](PanelWindow which, const char* name, void (ControlPanel::*content)()) {
+        if (folded(which))
+            return;
+        bool open = true;
+        if (ImGui::Begin(name, &open))
+            (this->*content)();
+        ImGui::End();
+        if (!open)
+            fold(which, true);
+    };
+    window(PanelWindow::Settings, kSettingsWindow, &ControlPanel::drawSettings);
+    window(PanelWindow::Inspector, kInspectorWindow, &ControlPanel::drawInspector);
+    window(PanelWindow::Measurements, kMeasurementsWindow, &ControlPanel::drawMeasurements);
     drawStatusBar();
     drawImageOverlay();
+    drawImageToolbar();
 
     // The choices of this frame are final now. recordTimings() gets its times in the next frame.
     frameInFlight_ =
-        FrameInFlight{activeTracer_, cameraVersion_, countWork() && facts_.tracers.at(activeTracer_).countsWork};
+        FrameInFlight{activeTracer_, cameraVersion_, countWork() && facts_.tracers.at(activeTracer_).countsWork,
+                      splitTracer().has_value()};
     if (!frameInFlight_->countedWork) {
         shaderSeconds(activeTracer_) += static_cast<double>(ImGui::GetIO().DeltaTime);
     }
@@ -752,9 +1097,10 @@ void ControlPanel::drawImageOverlay() const
     draw->PushClipRect(imageMin_, imageMax_, true);
 
     // The legend of the view, on the image in its bottom left corner.
-    if (const resolve::ViewLegend legend = resolve::legendFor(shading_); !legend.empty()) {
-        const float margin = ImGui::GetFontSize();
-        const float legendWidth = std::min(imageMax_.x - imageMin_.x - 2.0f * margin, 32.0f * ImGui::GetFontSize());
+    // shading(), not shading_: the image of a tracer without warps in list order shows each ray.
+    const float margin = ImGui::GetFontSize();
+    const float legendWidth = std::min(imageMax_.x - imageMin_.x - 2.0f * margin, 32.0f * ImGui::GetFontSize());
+    if (const resolve::ViewLegend legend = resolve::legendFor(shading()); !legend.empty() && legendWidth > margin) {
         const float legendTall = legendHeight(legend, legendWidth);
         const ImVec2 origin{imageMin_.x + margin, imageMax_.y - margin - legendTall};
         draw->AddRectFilled({origin.x - 8.0f, origin.y - 6.0f},
@@ -777,6 +1123,102 @@ void ControlPanel::drawImageOverlay() const
         draw->AddCircle(centre, 9.0f, IM_COL32(255, 230, 60, 255), 0, 2.0f);
     }
     draw->PopClipRect();
+    drawSplitOverlay();
+}
+
+void ControlPanel::drawSplitOverlay() const
+{
+    const std::optional<std::size_t> right = splitTracer();
+    if (!right)
+        return;
+    const FrameInWindow frame(facts_.width, facts_.height, imageMin_, imageMax_);
+    const float top = frame.top;
+    const float bottom = frame.top + static_cast<float>(facts_.height) * frame.scale;
+    const float x = frame.left + splitAt_ * static_cast<float>(facts_.width) * frame.scale;
+    ImDrawList* draw = ImGui::GetBackgroundDrawList();
+    draw->PushClipRect(imageMin_, imageMax_, true);
+    draw->AddLine({x, top}, {x, bottom}, IM_COL32(0, 0, 0, 200), 4.0f);
+    draw->AddLine({x, top}, {x, bottom}, IM_COL32(255, 255, 255, 255), 2.0f);
+    const float middle = 0.5f * (top + bottom);
+    draw->AddCircleFilled({x, middle}, 7.0f, IM_COL32(255, 255, 255, 255));
+    draw->AddCircle({x, middle}, 7.0f, IM_COL32(0, 0, 0, 255), 0, 2.0f);
+    // The names of both sides, at the top of each side of the line.
+    const auto label = [&](const std::string& text, float at, bool leftSide) {
+        const ImVec2 size = ImGui::CalcTextSize(text.c_str());
+        const float pad = 4.0f;
+        const float left = leftSide ? at - size.x - 3.0f * pad : at + pad;
+        const ImVec2 corner{left, top + pad};
+        draw->AddRectFilled(corner, {corner.x + size.x + 2.0f * pad, corner.y + size.y + 2.0f * pad},
+                            IM_COL32(18, 18, 18, 210), 3.0f);
+        draw->AddText({corner.x + pad, corner.y + pad}, IM_COL32(255, 255, 255, 255), text.c_str());
+    };
+    label(std::string("A  ") + tracerLabel(facts_.tracers.at(activeTracer_).name), x, true);
+    label(std::string("B  ") + tracerLabel(facts_.tracers.at(*right).name), x, false);
+    draw->PopClipRect();
+}
+
+void ControlPanel::drawImageToolbar()
+{
+    // A small bar in the top left corner of the image: open or fold the windows, save the image.
+    const float margin = 6.0f;
+    ImGui::SetNextWindowPos({imageMin_.x + margin, imageMin_.y + margin});
+    ImGui::SetNextWindowBgAlpha(0.75f);
+    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                                       ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings |
+                                       ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
+                                       ImGuiWindowFlags_NoMove;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {4.0f, 4.0f});
+    if (ImGui::Begin("##image toolbar", nullptr, flags)) {
+        const auto toggle = [this](PanelWindow which, const char* label, const char* tip) {
+            const bool open = !folded(which);
+            if (open)
+                ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+            if (ImGui::SmallButton(label))
+                fold(which, open);
+            if (open)
+                ImGui::PopStyleColor();
+            ImGui::SetItemTooltip("%s", tip);
+            ImGui::SameLine();
+        };
+        toggle(PanelWindow::Settings, "Settings", "Open or fold the settings (left).");
+        toggle(PanelWindow::Inspector, "Inspector", "Open or fold the inspector (right).");
+        toggle(PanelWindow::Measurements, "Measurements", "Open or fold the measurements (below).");
+        if (ImGui::SmallButton("Image only (F)"))
+            toggleImageOnly();
+        ImGui::SetItemTooltip("Folds every window; F again opens them all.");
+        ImGui::SameLine();
+        // Quick timing shows the shaded image whatever the view: nothing to save under the view's name.
+        ImGui::BeginDisabled(measuring());
+        if (ImGui::SmallButton("Save (P)"))
+            saveImage();
+        ImGui::SetItemTooltip("Writes the frame as a PNG with its legend, and the command that renders it again "
+                              "(.txt), into the folder of the last image. With A/B on, also the B image.");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Save as...")) {
+            try {
+                saveImage();
+                if (saveRequest_) {
+                    if (auto file = pickSaveFile({{"PNG image", {"png"}}}, saveRequest_->file)) {
+                        // Append, not replace: "lucy.v1" stays "lucy.v1.png". ".PNG" counts too.
+                        std::string extension = utf8(file->extension());
+                        for (char& c : extension)
+                            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                        if (extension != ".png")
+                            *file += ".png";
+                        saveImage(*file);
+                    } else {
+                        saveRequest_.reset();
+                    }
+                }
+            } catch (const std::exception& error) {
+                saveRequest_.reset();
+                problem_ = error.what();
+            }
+        }
+        ImGui::EndDisabled();
+    }
+    ImGui::End();
+    ImGui::PopStyleVar();
 }
 
 void ControlPanel::nextRayStep()

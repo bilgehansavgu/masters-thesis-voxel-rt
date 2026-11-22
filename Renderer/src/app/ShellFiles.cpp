@@ -1,5 +1,7 @@
 #include "ShellFiles.h"
 
+#include "PathText.h"
+
 #include <windows.h>
 
 #include <shellapi.h>
@@ -18,7 +20,7 @@ std::wstring shellPath(const std::filesystem::path& file)
     std::error_code error;
     std::filesystem::path full = std::filesystem::absolute(file, error).lexically_normal();
     if (error)
-        throw std::runtime_error("Not a valid path: '" + file.string() + "'");
+        throw std::runtime_error("Not a valid path: '" + utf8(file) + "'");
     return full.make_preferred().wstring();
 }
 
@@ -30,14 +32,14 @@ void revealFile(const std::filesystem::path& file)
     const auto result = reinterpret_cast<INT_PTR>(
         ShellExecuteW(nullptr, L"open", L"explorer.exe", arguments.c_str(), nullptr, SW_SHOWNORMAL));
     if (result <= 32) // ShellExecute returns a value above 32 when it worked
-        throw std::runtime_error(std::format("Cannot open Explorer at '{}' (error {})", file.string(), result));
+        throw std::runtime_error(std::format("Cannot open Explorer at '{}' (error {})", utf8(file), result));
 }
 
 bool recycleFile(const std::filesystem::path& file)
 {
     std::error_code error;
     if (!std::filesystem::is_regular_file(file, error))
-        throw std::runtime_error("Cannot move '" + file.string() + "' to the Recycle Bin: no such file");
+        throw std::runtime_error("Cannot move '" + utf8(file) + "' to the Recycle Bin: no such file");
     // SHFileOperation takes a list of paths ended by an empty one: two zero characters at the end.
     std::wstring from = shellPath(file);
     from.push_back(L'\0');
@@ -50,7 +52,7 @@ bool recycleFile(const std::filesystem::path& file)
     const int result = SHFileOperationW(&operation);
     if (result != 0)
         throw std::runtime_error(std::format(
-            "Cannot move '{}' to the Recycle Bin (is it open in another program?), error {}", file.string(), result));
+            "Cannot move '{}' to the Recycle Bin (is it open in another program?), error {}", utf8(file), result));
     return !operation.fAnyOperationsAborted;
 }
 

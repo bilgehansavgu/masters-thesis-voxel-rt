@@ -5,10 +5,12 @@
 #include "ControlPanel.h"
 
 #include "PanelWidgets.h"
+#include "PathText.h"
 
 #include <imgui.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <format>
@@ -152,7 +154,7 @@ void ControlPanel::drawTiming()
 void ControlPanel::drawWorkSummary()
 {
     if (!resolve::showsWork(shading_.mode)) {
-        ImGui::TextDisabled("Choose a work view (6 to =) in Output.");
+        ImGui::TextDisabled("Choose a work view (6 to =, C) in Output.");
         return;
     }
     if (!workSummary_ || workSummary_->rays() == 0) {
@@ -160,37 +162,83 @@ void ControlPanel::drawWorkSummary()
         return;
     }
     const RayWorkSummary& summary = *workSummary_;
+    if (!ImGui::BeginTable("work layout", 2, ImGuiTableFlags_SizingStretchProp))
+        return;
+    ImGui::TableSetupColumn("table", ImGuiTableColumnFlags_WidthStretch, 3.0f);
+    ImGui::TableSetupColumn("histogram", ImGuiTableColumnFlags_WidthStretch, 2.0f);
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
     ImGui::Text("%.1f %% of the rays hit",
                 100.0 * static_cast<double>(summary.raysWithHit()) / static_cast<double>(summary.rays()));
-    helpMarker("Averages over the frame on screen, about once a second. Thesis numbers come from --benchmark "
-               "(summary.ray_work).");
+    helpMarker("Over the frame on screen, about once a second. Thesis numbers come from --benchmark "
+               "(summary.ray_work). p99: 99 % of the rays with work stay at or below it. Warp use: the work of all "
+               "rays divided by the work their warps were busy for (warp size x the largest count of each warp); "
+               "100 % means no ray waited for another. Click a row for its histogram; the arrow opens the inspector "
+               "on the ray with the most.");
     const RayWorkSummary::Means all = summary.meanPerRay();
     const RayWorkSummary::Means hit = summary.meanPerRayWithHit();
     const core::RayWork& most = summary.most();
-    if (ImGui::BeginTable("work", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV)) {
+    const bool warps = summary.warpSize() > 0;
+    // The histogram of the chosen counter, or of the primitive tests (every tracer that counts
+    // work counts them) while the active tracer does not report the chosen one. The choice stays
+    // for the next tracer that reports it.
+    const WorkCounter shown = activeTracerCounts(histogramCounter_) ? histogramCounter_ : WorkCounter::PrimitiveTests;
+    if (ImGui::BeginTable("work", warps ? 7 : 6, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV)) {
         ImGui::TableSetupColumn("Per ray", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("All rays", ImGuiTableColumnFlags_WidthFixed);
-        ImGui::TableSetupColumn("Rays with hit", ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableSetupColumn("With hit", ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableSetupColumn("p99", ImGuiTableColumnFlags_WidthFixed);
         ImGui::TableSetupColumn("Most", ImGuiTableColumnFlags_WidthFixed);
+        if (warps)
+            ImGui::TableSetupColumn("Warp use", ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed);
         ImGui::TableHeadersRow();
-        const auto row = [](const char* name, double perRay, double perHit, std::uint32_t largest) {
+        const auto row = [&](const char* name, WorkCounter counter, double perRay, double perHit,
+                             std::uint32_t largest) {
+            ImGui::PushID(static_cast<int>(counter));
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            ImGui::TextUnformatted(name);
+            if (ImGui::Selectable(name, shown == counter,
+                                  ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap))
+                histogramCounter_ = counter;
             ImGui::TableNextColumn();
             ImGui::Text("%.2f", perRay);
             ImGui::TableNextColumn();
             ImGui::Text("%.2f", perHit);
             ImGui::TableNextColumn();
+            ImGui::TextUnformatted(resolve::formatCount(summary.percentile(counter, 0.99)).c_str());
+            ImGui::TableNextColumn();
             ImGui::Text("%u", largest);
+            if (warps) {
+                ImGui::TableNextColumn();
+                if (const std::optional<double> use = summary.warpUse(counter))
+                    ImGui::Text("%.0f %%", 100.0 * *use);
+                else
+                    ImGui::TextDisabled("-");
+            }
+            ImGui::TableNextColumn();
+            const bool current = costliestIsCurrent();
+            ImGui::BeginDisabled(largest == 0 || !current);
+            if (ImGui::ArrowButton("costliest", ImGuiDir_Right))
+                inspectCostliest(counter);
+            ImGui::EndDisabled();
+            if (current)
+                ImGui::SetItemTooltip("Inspect the ray with the most (%u)", largest);
+            else
+                ImGui::SetItemTooltip("The camera moved since these counts; the next summary comes within a second.");
+            ImGui::PopID();
         };
-        if (facts_.tracers.at(activeTracer_).countsStructureSteps)
-            row("Search structure steps", all.structureSteps, hit.structureSteps, most.structureSteps);
-        row("Primitive tests", all.primitiveTests, hit.primitiveTests, most.primitiveTests);
-        row("Mipmap cells read", all.mipmapCells, hit.mipmapCells, most.mipmapCells);
-        row("  skipped squares", all.mipmapSkips, hit.mipmapSkips, most.mipmapSkips);
-        row("Cells visited", all.cells, hit.cells, most.cells);
-        row("Runs tested", all.runs, hit.runs, most.runs);
+        if (activeTracerCounts(WorkCounter::StructureSteps))
+            row("Search structure steps", WorkCounter::StructureSteps, all.structureSteps, hit.structureSteps,
+                most.structureSteps);
+        row("Primitive tests", WorkCounter::PrimitiveTests, all.primitiveTests, hit.primitiveTests,
+            most.primitiveTests);
+        row("Mipmap cells read", WorkCounter::MipmapCells, all.mipmapCells, hit.mipmapCells, most.mipmapCells);
+        row("  skipped squares", WorkCounter::MipmapSkips, all.mipmapSkips, hit.mipmapSkips, most.mipmapSkips);
+        row("Cells visited", WorkCounter::Cells, all.cells, hit.cells, most.cells);
+        row("Runs tested", WorkCounter::Runs, all.runs, hit.runs, most.runs);
+        if (activeTracerCounts(WorkCounter::Cycles))
+            row("GPU clock cycles", WorkCounter::Cycles, all.cycles, hit.cycles, most.cycles);
         ImGui::EndTable();
     }
     if (most.skippedLevels != 0) {
@@ -206,13 +254,106 @@ void ControlPanel::drawWorkSummary()
         }
         wrapped(text, true);
     }
+    ImGui::TableNextColumn();
+    drawHistogram(shown);
+    ImGui::EndTable();
+}
+
+bool ControlPanel::activeTracerCounts(WorkCounter counter) const
+{
+    const PanelFacts::Tracer& tracer = facts_.tracers.at(activeTracer_);
+    if (counter == WorkCounter::StructureSteps)
+        return tracer.countsStructureSteps;
+    if (counter == WorkCounter::Cycles)
+        return tracer.countsCycles;
+    return tracer.countsWork;
+}
+
+void ControlPanel::drawHistogram(WorkCounter counter)
+{
+    // Rays by the count of `counter`, one bar per power of two (0, 1, 2-3, 4-7, ...), rays with a
+    // hit below and rays without a hit on top. The height is log10(1 + rays): the few costly rays stay
+    // visible next to the many cheap ones.
+    const RayWorkSummary& summary = *workSummary_;
+    const auto misses = summary.octaves(counter, false);
+    const auto hits = summary.octaves(counter, true);
+    std::size_t last = 0;
+    std::uint64_t tallest = 1;
+    for (std::size_t k = 0; k < misses.size(); ++k) {
+        if (misses[k] + hits[k] > 0)
+            last = k;
+        tallest = std::max(tallest, misses[k] + hits[k]);
+    }
+    static constexpr const char* kNames[] = {"Search structure steps", "Primitive tests", "Mipmap cells read",
+                                             "Skipped squares",        "Cells visited",   "Runs tested",
+                                             "GPU clock cycles"};
+    ImGui::TextUnformatted(kNames[static_cast<std::size_t>(counter)]);
+    ImGui::SameLine();
+    ImGui::TextDisabled("rays per count (log)");
+    const ImU32 missColor = IM_COL32(110, 140, 190, 255);
+    const ImU32 hitColor = ImGui::ColorConvertFloat4ToU32(kHighlightColor);
+    ImGui::SameLine();
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(hitColor), "hit");
+    ImGui::SameLine();
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(missColor), "miss");
+
+    const ImVec2 corner = ImGui::GetCursorScreenPos();
+    const float width = std::max(80.0f, ImGui::GetContentRegionAvail().x);
+    const float height = std::max(60.0f, ImGui::GetContentRegionAvail().y - ImGui::GetTextLineHeightWithSpacing());
+    ImGui::InvisibleButton("##histogram", {width, height});
+    const bool hovered = ImGui::IsItemHovered();
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled(corner, {corner.x + width, corner.y + height}, IM_COL32(25, 25, 25, 255));
+    const std::size_t bars = last + 1;
+    const float barWidth = width / static_cast<float>(bars);
+    const double top = std::log10(1.0 + static_cast<double>(tallest));
+    const auto heightOf = [&](std::uint64_t rays) {
+        return static_cast<float>(std::log10(1.0 + static_cast<double>(rays)) / top) * (height - 2.0f);
+    };
+    const auto rangeOf = [](std::size_t k) {
+        if (k == 0)
+            return std::string("0");
+        const std::uint64_t low = std::uint64_t{1} << (k - 1);
+        const std::uint64_t high = (std::uint64_t{1} << k) - 1;
+        return low == high ? std::to_string(low) : std::format("{}-{}", low, high);
+    };
+    for (std::size_t k = 0; k < bars; ++k) {
+        const float left = corner.x + static_cast<float>(k) * barWidth + 1.0f;
+        const float right = left + std::max(1.0f, barWidth - 2.0f);
+        const float bottom = corner.y + height;
+        // Stacked in log height: the whole bar is log(1 + all), the hit part its share of it.
+        const float whole = heightOf(misses[k] + hits[k]);
+        const double hitShare =
+            misses[k] + hits[k] == 0 ? 0.0 : static_cast<double>(hits[k]) / static_cast<double>(misses[k] + hits[k]);
+        const float hitHeight = whole * static_cast<float>(hitShare);
+        draw->AddRectFilled({left, bottom - whole}, {right, bottom - hitHeight}, missColor);
+        draw->AddRectFilled({left, bottom - hitHeight}, {right, bottom}, hitColor);
+        if (hovered && ImGui::GetIO().MousePos.x >= left - 1.0f && ImGui::GetIO().MousePos.x < right + 1.0f)
+            ImGui::SetTooltip("count %s\nrays with a hit: %llu\nrays without: %llu", rangeOf(k).c_str(),
+                              static_cast<unsigned long long>(hits[k]), static_cast<unsigned long long>(misses[k]));
+    }
+    // The count at the left end, the middle and the right end of the axis.
+    const auto axis = [&](std::size_t k, float x) {
+        const std::string text = rangeOf(k);
+        draw->AddText({x, corner.y + height + 1.0f}, ImGui::GetColorU32(ImGuiCol_TextDisabled), text.c_str());
+    };
+    axis(0, corner.x);
+    if (bars > 2)
+        axis(bars / 2, corner.x + static_cast<float>(bars / 2) * barWidth);
+    if (bars > 1) {
+        const std::string text = rangeOf(last);
+        axis(last, corner.x + width - ImGui::CalcTextSize(text.c_str()).x);
+    }
+    ImGui::Dummy({width, ImGui::GetTextLineHeight()});
 }
 
 void ControlPanel::drawComparison()
 {
     std::vector<std::string> choices;
     const bool surface = facts_.tracers.at(activeTracer_).findsHits;
-    if (facts_.voxelCount && surface)
+    // "Mipmap off / on" needs the same bricks with skipping the other way (IEncoding::skippingTwin).
+    const bool hasTwin = !facts_.encodings.empty() && !facts_.encodings.at(facts_.encoding).skippingTwin.empty();
+    if (facts_.voxelCount && surface && hasTwin)
         choices.emplace_back();
     for (const auto& tracer : facts_.tracers)
         if (tracer.findsHits && tracer.name != tracerName() && surface)
@@ -271,7 +412,7 @@ void ControlPanel::drawComparison()
         ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed);
         ImGui::TableHeadersRow();
         for (const auto& row : result.rows) {
-            ImGui::PushID(row.file.string().c_str());
+            ImGui::PushID(utf8(row.file).c_str());
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(tracerLabel(row.tracer));
@@ -309,7 +450,7 @@ void ControlPanel::drawComparison()
             ImGui::SetItemTooltip("Camera, tracer and encoding of this row");
             ImGui::SameLine();
             if (ImGui::SmallButton("Path"))
-                ImGui::SetClipboardText(std::filesystem::absolute(row.file).string().c_str());
+                ImGui::SetClipboardText(utf8(std::filesystem::absolute(row.file)).c_str());
             ImGui::SetItemTooltip("Copy the path of the results file");
             ImGui::PopID();
         }

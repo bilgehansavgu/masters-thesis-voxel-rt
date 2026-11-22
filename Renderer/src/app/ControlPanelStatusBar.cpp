@@ -3,11 +3,13 @@
 #include "ControlPanel.h"
 
 #include "PanelWidgets.h"
+#include "PathText.h"
 
 #include "thesis/shared/RayOrder.h"
 
 #include <imgui.h>
 
+#include <chrono>
 #include <format>
 
 namespace thesis::app {
@@ -41,18 +43,28 @@ void ControlPanel::drawStatusBar()
                                        ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
     if (ImGui::Begin("##status", nullptr, flags)) {
         const std::filesystem::path& model = facts_.models.at(facts_.model);
-        std::string text = model.empty() ? std::string("box field") : model.filename().string();
+        std::string text = model.empty() ? std::string("box field") : utf8(model.filename());
         if (!facts_.encodings.empty()) {
             text +=
                 "   " + facts_.encodingChoices.describe(facts_.encoding) + std::format("   Brick {}", facts_.brickSize);
         }
-        text += std::format("   Rays {} {}x{}   Camera {}   {}   {}",
+        text += std::format("   Rays {} {}x{}   Camera {}   {}",
                             facts_.rayOrder == THESIS_RAY_ORDER_TILES ? "tiles" : "rows", facts_.width, facts_.height,
-                            cameraName(cameraPreset_), tracerLabel(facts_.tracers.at(activeTracer_).name),
-                            resolve::kShadingModeNames.at(static_cast<std::size_t>(shading_.mode)));
+                            bookmark_ ? *bookmark_ : cameraName(cameraPreset_),
+                            tracerLabel(facts_.tracers.at(activeTracer_).name));
+        if (const std::optional<std::size_t> right = splitTracer())
+            text += std::format(" | B {}", tracerLabel(facts_.tracers.at(*right).name));
+        text += std::format("   {}{}", resolve::kShadingModeNames.at(static_cast<std::size_t>(shading_.mode)),
+                            resolve::showsCount(shading_.mode) && shading().warpSize > 0 ? ", warp maximum" : "");
         text += std::format("   Trace {:.3f} ms{}", traceMs_.value, lastFrameCounted_ ? " (counting)" : "");
+        const bool noticeShown =
+            !notice_.empty() && std::chrono::steady_clock::now() - noticeTime_ < std::chrono::seconds(4);
         if (!loading_.empty()) {
             ImGui::TextColored(kHighlightColor, "%s ...", loading_.c_str());
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", text.c_str());
+        } else if (noticeShown) {
+            ImGui::TextColored(kHighlightColor, "%s", notice_.c_str());
             ImGui::SameLine();
             ImGui::TextDisabled("%s", text.c_str());
         } else {

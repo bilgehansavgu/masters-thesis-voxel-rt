@@ -23,9 +23,10 @@ enum class ShadingMode : std::uint32_t {
     WorkStructure = 9,  // cells or nodes of the tracer's own search structure the ray read
     WorkMipmap = 10,    // cells of the min/max mipmaps of the bricks the ray read
     WorkSkipLevel = 11, // the largest mipmap square that the walk skipped: one colour for each level
+    WorkCycles = 12,    // GPU clock cycles of the ray, in the counting variant (core::RayWork::cycles)
 };
 
-inline constexpr std::array<const char*, 12> kShadingModeNames{"Shaded",
+inline constexpr std::array<const char*, 13> kShadingModeNames{"Shaded",
                                                                "Distance",
                                                                "Primitive id",
                                                                "Stored normal",
@@ -36,7 +37,8 @@ inline constexpr std::array<const char*, 12> kShadingModeNames{"Shaded",
                                                                "Work: cell kind at the hit",
                                                                "Work: search structure steps",
                                                                "Work: mipmap cells read",
-                                                               "Work: largest mipmap square skipped"};
+                                                               "Work: largest mipmap square skipped",
+                                                               "Work: GPU clock cycles"};
 
 // True for the views that show the work counters.
 [[nodiscard]] constexpr bool showsWork(ShadingMode mode)
@@ -49,6 +51,13 @@ inline constexpr std::array<const char*, 12> kShadingModeNames{"Shaded",
 [[nodiscard]] constexpr bool showsCount(ShadingMode mode)
 {
     return showsWork(mode) && mode != ShadingMode::WorkHitCell && mode != ShadingMode::WorkSkipLevel;
+}
+
+// The count at the end of the colour map of a count view before anyone sets it: clock cycles
+// run to tens of thousands per ray, the other counters to tens.
+[[nodiscard]] constexpr float defaultScaleMaximum(ShadingMode mode)
+{
+    return mode == ShadingMode::WorkCycles ? 20000.0f : 64.0f;
 }
 
 // What a count view counts, as the title of its colour bar. nullptr for the other views.
@@ -65,6 +74,8 @@ inline constexpr std::array<const char*, 12> kShadingModeNames{"Shaded",
         return "Search structure steps per ray";
     case ShadingMode::WorkMipmap:
         return "Mipmap cells read per ray";
+    case ShadingMode::WorkCycles:
+        return "GPU clock cycles per ray";
     default:
         return nullptr;
     }
@@ -90,6 +101,10 @@ struct ShadingParams {
     float distanceFar = 50.0f;
     ColorScale workScale; // count views: how a count becomes a colour
     LightDirection light; // lit views
+    // Count views: 0 shows the count of each ray. Otherwise the rays are grouped in warps of this
+    // many neighbours of the ray list, and each pixel shows the largest count of its warp: the
+    // warp is busy until its slowest ray is done.
+    std::uint32_t warpSize = 0;
 };
 
 } // namespace thesis::resolve

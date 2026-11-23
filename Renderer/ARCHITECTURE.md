@@ -37,7 +37,7 @@ Socket = extension point with one rule. Plugin = folder that fill socket.
 | Measurement output | number go out, measurer not know where | `metrics::MetricSink` | results file, Tracy plot |
 
 - Plugin register by `thesis_register_plugin(...)` in own `CMakeLists.txt`. CMake write call list.
-- Primitive kind chosen at compile time. Tracer compile once per kind, plus counting variant. No runtime switch in shader.
+- Primitive kind chosen at compile time. Tracer compile once per kind, plus counting variant. No runtime switch in shader. No copy of tracer per kind.
 - Encoding name = primitive kind name.
 
 ### 1.4 One Job Each
@@ -80,7 +80,8 @@ Thing C++ and shader both know is written one place.
 ### 1.8 C++ Way
 - C++20. Namespace `thesis::<library>`. Interface name start `I`. File name = main class name without `I` (`ITracer` in `Tracer.h`). Small struct may live beside its class.
 - Warnings are error. Code follow `.clang-format`. `format_check` test red on unformatted code.
-- Error throw. Message say what and where. Vulkan call wrap in `THESIS_VK_CHECK`. Bad input = `std::runtime_error` or `std::invalid_argument`. Wrong use by programmer = `std::logic_error`. Silent return only when absence legal.
+- Error throw. Message say what and where. Vulkan call wrap in `THESIS_VK_CHECK`. Bad input = `std::runtime_error` or `std::invalid_argument`. Wrong use by programmer = `std::logic_error`. No silent fallback: silent return only when absence legal. Example: tracer cannot do scene = throw `UnsupportedScene`.
+- Fix cause, not symptom. No workaround, no technical debt. Limit you cannot fix = `WHY` comment on code + tell human.
 - Well-known library beat own code. Dependency come through vcpkg. `vcpkg.json` is list. New dependency = ask human first.
 - Code comment stay normal prose. Say what and why.
 - Build, run, measure obey [README.md](README.md). Knowledge, why of decision, and result live in [wiki](https://github.com/bilgehansavgu/masters-thesis-voxel-rt/wiki). Never repeat here.
@@ -162,20 +163,7 @@ Find thing: know owner -> open owner folder. Know class -> file name match class
 - **New bit layout of 2012 format**: brick test shared. Kind's `primitive.slang` give only four function of `IBrickLayout`.
 - **New primitive kind**: `shaders/primitives/<kind>/primitive.slang` keep contract in `shaders/primitives/box/primitive.slang`. Add kind to `THESIS_PRIMITIVE_KINDS` in `CMakeLists.txt`. Kind buffer go in `core::Scene::primitiveData` (binding 9..15). Tracer pass it through, never read it.
 
-## 5. Must Not Do
-- No tracer or encoding name outside own folder.
-- No Vulkan in CPU library.
-- No runtime switch over primitive kind in shader. No copy of tracer per kind.
-- No static self-registering object. Linker drop it from static library, silent.
-- No number from Tracy or counting variant in results.
-- No hand-typed number in thesis table.
-- No benchmark with validation on.
-- No binding slot, bit or node number written twice.
-- No silent fallback. Tracer cannot do scene = throw `UnsupportedScene`.
-- No loosening tolerance until red test go green. Fix code, or bound limit with number and tell human.
-- Fix cause, not symptom. No workaround, no technical debt. Limit you cannot fix = `WHY` comment on code + tell human.
-
-## 6. Decision Already Made
+## 5. Decision Already Made
 Do not argue these again without human. Why of each live in wiki decision table.
 - Voxels only. Input is triangle mesh, voxelized offline. Data in-core.
 - Vulkan first. Hardware tracer = ray queries. Hardware pipeline tracer = ray tracing pipeline, same model as OptiX, with and without shader execution reordering (SER). Software tracer = compute shader. OptiX later only as plugin, only if professor want.
@@ -189,7 +177,7 @@ Do not argue these again without human. Why of each live in wiki decision table.
 - Catch2 for test. Tracy for live profile. No own framework on top.
 - Code in this repo. Knowledge, decision, result in wiki.
 
-## 7. Proof By Test
+## 6. Proof By Test
 Proof is automated test. `ctest --preset release`. Green = proven.
 `format_check` hold format. `architecture_check` (`scripts/check_architecture.py`) hold plugin name in own folder (and in test of that plugin), side tag on every header, no Vulkan and no `GPU` header in `CPU`, `Shared` or `View` file. `.cpp` take side of its header.
 
@@ -203,5 +191,6 @@ Rule:
 - Mechanic and its test ship in same change. No test = not done.
 - GPU test tagged `[gpu]`. Validation layer on. Validation message = red.
 - Change test only when assert was wrong. Test that caught real thing is never wrong. Setup may change, assert is claim.
+- No loosening tolerance until red test go green. Fix code, or bound limit with number and tell human.
 - Known limit live as number in test, never as comment alone.
 - Counting variant must find same hits as timed variant. Ray log must agree with work counter and end at its hit.

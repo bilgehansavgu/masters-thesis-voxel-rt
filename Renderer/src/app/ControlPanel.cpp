@@ -742,6 +742,7 @@ void ControlPanel::recordRayLog(std::optional<tracing::RayLog> log)
                             structure_.searchStep(*rayLog_, activeTracer_, facts_.tracers.at(activeTracer_).diagram,
                                                   facts_.geometry, facts_.sceneBounds,
                                                   primaryRay(*captureCamera_, pixel, resolution)));
+    closeUp_ = {}; // a new ray: the close-up starts from its own angle again
     orientCloseUp();
     if (pendingObserver_) {
         camera_ = *pendingObserver_;
@@ -1236,7 +1237,8 @@ void ControlPanel::nextRayStep()
 
 void ControlPanel::orientCloseUp()
 {
-    if (!lesson_ || !captureCamera_)
+    // A view the user set stays until the next ray: stepping between stages compares them from one angle.
+    if (!lesson_ || !captureCamera_ || closeUp_.moved)
         return;
     const RayStage& stage = lesson_->stages.at(lessonStage_);
     if (stage.cumulative && stage.closeUp) {

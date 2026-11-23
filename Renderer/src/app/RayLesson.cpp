@@ -297,7 +297,8 @@ void drawBrickCloseUp(const RayLesson& lesson, std::size_t stageIndex, std::size
     // The wheel zooms the close-up instead of scrolling the panel.
     ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
     const glm::vec2 middle{start.x + width * 0.5f, start.y + height * 0.5f};
-    if (ImGui::IsItemActive()) {
+    if (ImGui::IsItemActive() && (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f)) {
+        view.moved = true;
         if (ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
             view.pan += glm::vec2(io.MouseDelta.x, io.MouseDelta.y);
         } else {
@@ -312,6 +313,7 @@ void drawBrickCloseUp(const RayLesson& lesson, std::size_t stageIndex, std::size
             const glm::vec2 cursor = glm::vec2(io.MousePos.x, io.MousePos.y) - middle;
             view.pan = cursor - (cursor - view.pan) * (zoom / view.zoom);
             view.zoom = zoom;
+            view.moved = true;
         }
         if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
             view.zoom = 1.0f;

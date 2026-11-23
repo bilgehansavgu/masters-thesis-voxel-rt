@@ -101,6 +101,7 @@ struct CloseUpView {
     float pitch = 20.0f; // degrees, left drag
     float zoom = 1.0f;   // 1 = the whole brick fits; mouse wheel, towards the cursor
     glm::vec2 pan{0.0f}; // pixels; right drag
+    bool moved = false;  // the user turned, zoomed or panned it: a change of stage keeps the view
 };
 
 // The close-up of the brick in the panel: its full voxels, the ray, and the highlights of one event.

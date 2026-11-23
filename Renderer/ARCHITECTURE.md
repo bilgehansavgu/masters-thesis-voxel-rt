@@ -7,8 +7,8 @@ Renderer is test bench of master's thesis. Question: how well 2012 voxel brick f
 ### 1.1 Hold Constant, Change One
 Thesis compare search structure. Everything else same for every tracer: same ray buffer, same brick test, same shading, same timer.
 - Tracer own how ray find primitive. Nothing else.
-- Brick test live once, `shaders/common/brick2012.slang`. Every tracer reach it through `import primitive;`.
-- Test: change let one tracer see other ray, other brick code or other shading? Comparison broke. Example: hardware tracer and octree tracer both call same `intersectPrimitive`.
+- Tracer reach primitive only through `import primitive;`. Brick test of 2012 format live once, `shaders/common/brick2012.slang`, behind that import.
+- Test: change give one tracer other ray, other brick code or other shading? Comparison broke. Example: hardware tracer and octree tracer both call same `intersectPrimitive`.
 
 ### 1.2 Data -> Work -> View
 Arrow point one way. Never back.
@@ -49,7 +49,7 @@ One library, one job. One class, one job.
 
 ### 1.5 Open Closed
 New plugin cost zero old code. Allowed old touch: one `add_subdirectory` line, and `THESIS_PRIMITIVE_KINDS` list for new primitive kind.
-No `if (name == "hardware")`. No `switch` on tracer or encoding. Ask interface instead:
+No `if (name == "hardware")`. No `switch` on tracer or encoding. Ask interface instead. Full list in `Tracer.h` and `Encoding.h`. Main ones:
 - `findsHits()` false = baseline. Correctness test skip it. Example: `null`.
 - `countsWork()` false = no counting variant.
 - `prepare()` throw `UnsupportedScene` = tracer cannot do scene. Window hide it and say why. Benchmark skip it unless asked by name.
@@ -64,15 +64,15 @@ Test: tracer name appear outside own folder? Wrong. Text about one tracer live i
 Number in thesis must survive "how you know?".
 - Timed variant make number. Counting variant (`THESIS_COUNT_WORK`) is diagnosis, never timed. Test: results number come from counting shader? Wrong. Example: timed variant counter struct empty, cost zero.
 - `gpu::GpuTimer` is truth for results. Tracy is live look only.
-- Ray and hit pass through GPU memory, same for every tracer. `null` tracer show how much of trace time is that traffic. Thesis number = raw trace time. Time above `null` is hint only: GPU read memory and search at same time, so difference is not search cost. Test: thesis divide two "above null" number? Wrong. Example: Lucy 2048, standard orbit, `null` 0.451 ms, `hardware` 0.487 ms; difference 0.037 ms too small to divide.
+- Ray and hit pass through GPU memory, same for every tracer. `null` tracer show how much of trace time is that traffic. Thesis number = raw trace time. Time above `null` is hint only: GPU read memory and search at same time, so difference is not search cost. Test: thesis divide two "above null" number? Wrong. Example: table show `null` time beside each tracer time, never tracer minus `null` as search cost.
 - Thesis number come from results file. Results file name git commit, GPU, clock, power state. Table made by `scripts/run_benchmarks.py`, never by hand.
 - Validation layer off for number, on for test.
 - Benchmark protocol (warm-up, repeat, median, spread) live in [README.md](README.md#measuring-rules). Never repeat here.
 
 ### 1.7 Write Once
 Thing C++ and shader both know is written one place.
-- Number many library know: `shared/include/thesis/shared/`. Socket binding slot: `Bindings.h`. Brick bits: `Brick2012.h` (brick test shared by every tracer). Hit bits, ray log: same folder.
-- Number one plugin know (own binding, node bits): `<Name>Shared.h` in plugin own `include/`. Shader build put that folder on search path. Example: `software_octree/.../OctreeShared.h`.
+- Number many library know: `shared/include/thesis/shared/`. Socket binding slot: `Bindings.h`. Bits and binding of 2012 brick: `Brick2012.h` (`shaders/common` and window read it). Hit bits, ray log: same folder.
+- Number one plugin know (own binding, node bits): `<Name>Shared.h` in plugin own `include/`. Shader build put that folder on search path. Primitive kind shader see `include/` of every encoding. Example: `software_octree/.../OctreeShared.h`, `bitmask/.../BitmaskShared.h`.
 - Only `#define` and comment in these header, both language read it.
 - GPU struct: C++ mirror with `static_assert`, in `core/GpuTypes.h` (or plugin header for plugin struct). `TestShaderLayouts` compare to shader field by field. Kernel creation fail loud when shader read binding C++ not give.
 - Test: same number in `.cpp` and `.slang`? Move it to shared header. Header in `shared/` read by one plugin only? Move it into that plugin.
@@ -81,7 +81,7 @@ Thing C++ and shader both know is written one place.
 - C++20. Namespace `thesis::<library>`. Interface name start `I`. File name = main class name without `I` (`ITracer` in `Tracer.h`). Small struct may live beside its class.
 - Warnings are error. Code follow `.clang-format`. `format_check` test red on unformatted code.
 - Error throw. Message say what and where. Vulkan call wrap in `THESIS_VK_CHECK`. Bad input = `std::runtime_error` or `std::invalid_argument`. Wrong use by programmer = `std::logic_error`. Silent return only when absence legal.
-- Well-known library beat own code. Dependency come through vcpkg (`vcpkg.json`). New dependency = ask human first. In use: vk-bootstrap, VMA, Tracy, Catch2, CLI11, Dear ImGui, GLFW, nlohmann_json, glm, miniply, stb.
+- Well-known library beat own code. Dependency come through vcpkg. `vcpkg.json` is list. New dependency = ask human first.
 - Code comment stay normal prose. Say what and why.
 - Build, run, measure obey [README.md](README.md). Knowledge, why of decision, and result live in [wiki](https://github.com/bilgehansavgu/masters-thesis-voxel-rt/wiki). Never repeat here.
 
@@ -99,7 +99,7 @@ Folder fix side of library: `core`, `mesh`, `voxel`, `encoding`, `encodings`, `m
 2. Edit only when must. Doc is law, not notebook. Code change is not reason to edit.
 3. Never invent new section. Ask human first.
 4. Line earn place only when it change how next task start. Fact about one class or one shader go as `WHY` comment on that thing. Doc may point, never retell.
-5. Rule take delete-test shape: name, one-line test, one-line example. Rule that cannot stand without its because is scar, not rule. Scar go on code.
+5. Rule take delete-test shape: name, one-line test, one-line example. Rule stand on test and example alone. Long because (bug story, driver quirk, version number) go in `WHY` comment on code or wiki. Doc may keep one-clause because.
 
 ## 4. Folder Structure
 Folder show owner. One library = one folder = one CMake target `thesis::<name>`, made by `thesis_add_library`. Library keep its code, header and shader together.
@@ -108,13 +108,15 @@ Dependency point one way. No cycle. Build enforce it: library see only header of
 Plugin never link other plugin. Code two plugin share go down into socket library. Test: delete one plugin folder, other plugin still build? Must. Example: `GridFrame` live in `tracing`, grid and octree tracer both stand on it.
 
 ```
-app ──► tracers/* ──► tracing ──► gpu ──► profiling
- │        workloads ─┘   │
- │        resolve ───────┘
- ├──► metrics ──► core ◄── tracing
- └──► encodings/* ──► encoding ──► voxel ──► mesh
-                         └──► core
-tools/model ──► encodings/*, metrics
+app ──► every library below. Glue, nobody use it.
+
+tracers/*, workloads, resolve ──► tracing ──► gpu ──► profiling
+                                     └──► core
+metrics ──► core, profiling
+encodings/* ──► encoding ──► voxel ──► mesh
+                   └──► core
+tools/model ──► encodings/*, metrics, voxel, mesh
+shared/ (header only) ◄── every library that share number with shader
 ```
 
 ```
@@ -127,14 +129,14 @@ Renderer/
 
 <library> is one of:
   core/         CPU. Shared word: scene, camera, GPU struct mirror, registry, statistics, hit comparison. Know nobody (glm only)
-  mesh/         CPU. Triangle mesh, PLY reader
+  mesh/         CPU. Triangle mesh, mesh file reader
   voxel/        CPU. Voxel model, voxelizer, voxel file, packed normal, regroup into brick
   encoding/     CPU. Encoding socket: IEncoding, memory report
-  encodings/    CPU. Encoding plugin. brick2012/ = both bit layout, with and without mipmap
+  encodings/    CPU. Encoding plugin, one folder per format family
   profiling/    CPU marker on Tracy timeline
   gpu/          GPU. Thin Vulkan: device, buffer, image, compute kernel, ray tracing pipeline, timer, acceleration structure
   tracing/      GPU. Tracer socket: ITracer, ray batch, GPU scene, trace kernel, trace pipeline, box BVH, ray log, grid frame
-  tracers/      GPU. Tracer plugin: hardware, hardware_pipeline, software_grid, software_octree, software_bvh, null
+  tracers/      GPU. Tracer plugin, one folder each
   workloads/    GPU. Ray maker: camera rays. Know no tracer
   resolve/      GPU. Hit list -> image. Know no tracer
   metrics/      CPU. Measurement output socket: Tracy plot, JSON results file, system state
@@ -156,7 +158,7 @@ Find thing: know owner -> open owner folder. Know class -> file name match class
 
 ### 4.1 Extend
 - **New tracer**: `src/tracers/<name>/` with `ITracer` (`text()`; `diagram()` and `describeStructureStep()` if it has structure), shader, `<Name>Shared.h` for own binding (slot 2..6) and bits, `CMakeLists.txt` calling `thesis_register_plugin(SOCKET TRACER ...)`. Add folder in `src/tracers/CMakeLists.txt`. Agreement test cover it without change. Compute shader tracer stand on `TraceKernels`. Ray tracing pipeline tracer stand on `TracePipelines`, shader built with `thesis_add_shaders(... RAY_TRACING)`. Tracer that let GPU search use `BoxBvh`, so all walk same tree. One plugin may register several tracer, one per question. Example: `hardware_pipeline` register three.
-- **New encoding**: `src/encodings/<name>/` with `IEncoding`, `CMakeLists.txt` calling `thesis_register_plugin(SOCKET ENCODING ...)`. Add folder in `src/encodings/CMakeLists.txt`. Add primitive kind of same name. Round trip test, cube-by-cube test, report tool, benchmark and panel pick it up without change.
+- **New encoding**: `src/encodings/<name>/` with `IEncoding`, `<Name>Shared.h` for own bits and binding (slot 9..15), `CMakeLists.txt` calling `thesis_register_plugin(SOCKET ENCODING ...)`. Add folder in `src/encodings/CMakeLists.txt`. Add primitive kind of same name. Round trip test, cube-by-cube test, report tool, benchmark and panel pick it up without change.
 - **New bit layout of 2012 format**: brick test shared. Kind's `primitive.slang` give only four function of `IBrickLayout`.
 - **New primitive kind**: `shaders/primitives/<kind>/primitive.slang` keep contract in `shaders/primitives/box/primitive.slang`. Add kind to `THESIS_PRIMITIVE_KINDS` in `CMakeLists.txt`. Kind buffer go in `core::Scene::primitiveData` (binding 9..15). Tracer pass it through, never read it.
 
@@ -177,21 +179,19 @@ Find thing: know owner -> open owner folder. Know class -> file name match class
 Do not argue these again without human. Why of each live in wiki decision table.
 - Voxels only. Input is triangle mesh, voxelized offline. Data in-core.
 - Vulkan first. Hardware tracer = ray queries. Hardware pipeline tracer = ray tracing pipeline, same model as OptiX, with and without shader execution reordering (SER). Software tracer = compute shader. OptiX later only as plugin, only if professor want.
-- SER through `VK_NV_ray_tracing_invocation_reorder`, not EXT: vcpkg Vulkan header (version 309) know only NV. Switch to EXT = vcpkg baseline bump = ask human.
+- SER through `VK_NV_ray_tracing_invocation_reorder`, not EXT. Switch to EXT = vcpkg baseline bump = ask human.
 - Slang for every shader. SPIR-V compiled at build time.
 - Bit layout of 2012 format is our design. Paper not specify it. Never credit paper for it.
 - Plugin registered by CMake, not by static object, not by hand list.
 - Primitive kind at compile time.
 - Tracers agree within tolerance, not bit-exact. Tolerance live in `core/HitComparison.h`.
-- Warm-up at least 10 seconds. Driver run new shader slow first seconds.
-- `null` tracer show ray and hit memory traffic. Thesis number is raw trace time, not time above `null`.
 - Thesis number from RTX 4070 Laptop GPU (8 GB), plugged in.
 - Catch2 for test. Tracy for live profile. No own framework on top.
 - Code in this repo. Knowledge, decision, result in wiki.
 
 ## 7. Proof By Test
 Proof is automated test. `ctest --preset release`. Green = proven.
-`format_check` hold format. `architecture_check` (`scripts/check_architecture.py`) hold plugin name in own folder (and in test of that plugin), side tag on every header, no Vulkan in `CPU` header, no `GPU` header in `View` header.
+`format_check` hold format. `architecture_check` (`scripts/check_architecture.py`) hold plugin name in own folder (and in test of that plugin), side tag on every header, no Vulkan and no `GPU` header in `CPU`, `Shared` or `View` file. `.cpp` take side of its header.
 
 Three proof per socket:
 - Tracer: all tracers agree on same rays. Tracers match hand-computed hit. Tracers match CPU test of every voxel cube (double precision, own code, share nothing with shader).

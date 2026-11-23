@@ -78,9 +78,10 @@ Code rules the build enforces:
 - **Warnings are errors** in project code (`-DTHESIS_WARNINGS_AS_ERRORS=OFF` to experiment).
 - **Formatting** follows `.clang-format`. The `format_check` test fails on unformatted code;
   `cmake --build --preset release --target format` fixes it.
-- **Binding slots** are written once, in `shared/include/thesis/shared/Bindings.h`, which C++ and
-  shaders both include. The bits of the brick format are written once, in
-  `shared/include/thesis/shared/Brick2012.h`.
+- **Binding slots and bits** are written once, in headers that C++ and shaders both include.
+  The slots of the sockets are in `shared/include/thesis/shared/Bindings.h`. The bits and slots
+  of the 2012 brick format are in `shared/include/thesis/shared/Brick2012.h`. Every other plugin
+  keeps its own in `<Name>Shared.h` in its `include/` folder.
 - **Shader interfaces are checked.** The shader compiler writes a layout report (`<shader>.json`)
   next to each `.spv`. Creating a kernel or ray tracing pipeline fails with a clear message if a shader reads a binding
   the C++ side does not provide, with the wrong type, or expects a different push-constant

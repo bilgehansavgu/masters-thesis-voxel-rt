@@ -1,15 +1,6 @@
-# Dependency direction (an arrow means "may use"):
-#
-#   app ──► tracers/* ──► tracing ──► gpu ──► profiling
-#    │        workloads ─┘   │
-#    │        resolve ───────┘
-#    ├──► metrics ──► core ◄── tracing
-#    └──► encodings/* ──► encoding ──► voxel ──► mesh
-#                            └──► core
-#   tools/model ──► encodings/*, metrics
-#
-# core, metrics, mesh, voxel and the encodings know nothing about Vulkan: voxel data is made and
-# checked on the CPU. Each library only sees the headers of what it links.
+# The dependency direction is drawn in ARCHITECTURE.md, section 4. Each library only sees the
+# headers of what it links. core, metrics, mesh, voxel and the encodings know nothing about
+# Vulkan: voxel data is made and checked on the CPU.
 
 add_subdirectory(core)
 add_subdirectory(mesh)

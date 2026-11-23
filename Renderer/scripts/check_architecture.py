@@ -6,9 +6,12 @@
    that run every plugin, ask the plugin (ITracer, IEncoding) instead of naming it.
 2. Every header says its side under #pragma once: // Side: CPU | GPU | Shared | View
    (shared/ headers and <Name>Shared.h of a plugin: /* Side: Shared */ on the first line).
-3. A header with side CPU or Shared includes no Vulkan header.
-4. A header with side View includes no project header with side GPU: window code reads what the
-   GPU work made as plain data, it never records GPU commands itself.
+3. A header with side CPU, Shared or View includes no Vulkan header and no project header with
+   side GPU. CPU code runs in tests without a GPU; window code reads what the GPU work made as
+   plain data, it never records GPU commands itself.
+4. Rule 3 holds for each .cpp file too, with the side of its header: Foo.cpp and FooPart.cpp are
+   the code of the Foo.h beside them (the header with the longest name the .cpp name starts with).
+   A .cpp file without such a header (main.cpp, a test) has no side.
 
 Exit code 0 = every rule holds. Each break is printed as file:line: message.
 """
@@ -24,6 +27,8 @@ REGISTRATION = re.compile(r'registry\.add\(\s*"([^"]+)"')
 ANY_REGISTRATION = re.compile(r'registry\.add\(\s*(\S)')
 STRING = re.compile(r'"((?:[^"\\\n]|\\.)*)"')
 SIDE = re.compile(r"^(?://|/\*) Side: (\w+)")
+# Headers that bring Vulkan in: the Vulkan headers themselves and the libraries built on them.
+VULKAN = re.compile(r"(vulkan/|vk_mem_alloc\.h|VkBootstrap\.h)")
 
 
 INCLUDE = re.compile(r'^\s*#include [<"]([^>"]+)[>"]')
@@ -100,33 +105,43 @@ def public_header(include):
 
 
 def check_sides(problems):
-    headers = [p for folder in ("src", "shared", "tests") for p in (ROOT / folder).rglob("*.h")]
+    folders = ("src", "shared", "tests")
+    headers = [p for folder in folders for p in (ROOT / folder).rglob("*.h")]
     side_of = {}
     for path in headers:
         lines = path.read_text(encoding="utf-8").splitlines()
         sides = [m.group(1) for line in lines[:4] if (m := SIDE.match(line))]
         side_of[path] = sides[0] if len(sides) == 1 and sides[0] in SIDES else None
     for path in sorted(headers):
-        lines = path.read_text(encoding="utf-8").splitlines()
-        side = side_of[path]
-        where = path.relative_to(ROOT)
-        if side is None:
-            problems.append(f"{where}:1: needs one side tag under #pragma once: // Side: {' | '.join(SIDES)}")
+        if side_of[path] is None:
+            problems.append(f"{path.relative_to(ROOT)}:1: needs one side tag under #pragma once: "
+                            f"// Side: {' | '.join(SIDES)}")
+
+    # A .cpp file is the code of the header beside it that its name starts with, so it has that side.
+    def side_of_source(source):
+        owners = [h for h in headers if h.parent == source.parent and source.stem.startswith(h.stem)]
+        return side_of[max(owners, key=lambda h: len(h.stem))] if owners else None
+
+    sources = [p for folder in folders for p in (ROOT / folder).rglob("*.cpp")]
+    files = [(p, side_of[p]) for p in headers] + [(p, side_of_source(p)) for p in sources]
+    for path, side in sorted(files):
+        if side not in ("CPU", "Shared", "View"):
             continue
+        where = path.relative_to(ROOT)
+        lines = path.read_text(encoding="utf-8").splitlines()
         for number, line in enumerate(lines, 1):
             m = INCLUDE.match(line)
             if not m:
                 continue
             include = m.group(1)
-            if side in ("CPU", "Shared") and re.match(r"(vulkan/|thesis/gpu/)", include):
-                target = public_header(include)
-                if target is None or side_of.get(target) != "CPU":
-                    problems.append(f"{where}:{number}: side {side} includes a Vulkan header")
-            if side == "View":
-                target = public_header(include) or (path.parent / include)
-                if side_of.get(target) == "GPU":
-                    problems.append(f"{where}:{number}: side View includes '{include}', a GPU header; "
-                                    "read what the GPU work made as plain data instead")
+            if VULKAN.match(include):
+                problems.append(f"{where}:{number}: side {side} includes the Vulkan header '{include}'")
+                continue
+            target = public_header(include) or (path.parent / include).resolve()
+            if side_of.get(target) == "GPU" or (include.startswith("thesis/gpu/") and target not in side_of):
+                advice = ("read what the GPU work made as plain data instead" if side == "View"
+                          else "move the code that needs it to a GPU file")
+                problems.append(f"{where}:{number}: side {side} includes '{include}', a GPU header; {advice}")
 
 
 def main():

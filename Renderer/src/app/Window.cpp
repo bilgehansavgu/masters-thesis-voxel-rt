@@ -1,8 +1,5 @@
 #include "Window.h"
 
-#include "thesis/gpu/Check.h"
-
-#define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
 #include <stdexcept>
@@ -33,7 +30,7 @@ Window::~Window()
     glfwTerminate();
 }
 
-VkExtent2D Window::framebufferExtent() const
+FramebufferSize Window::framebufferSize() const
 {
     int width = 0;
     int height = 0;
@@ -43,8 +40,8 @@ VkExtent2D Window::framebufferExtent() const
 
 bool Window::minimised() const
 {
-    const VkExtent2D extent = framebufferExtent();
-    return extent.width == 0 || extent.height == 0;
+    const FramebufferSize size = framebufferSize();
+    return size.width == 0 || size.height == 0;
 }
 
 bool Window::focused() const
@@ -73,26 +70,6 @@ void Window::pollEvents()
 bool Window::consumeResize()
 {
     return std::exchange(resized_, false);
-}
-
-std::vector<std::string> Window::requiredInstanceExtensions()
-{
-    if (!glfwInit()) {
-        throw std::runtime_error("GLFW could not be initialised");
-    }
-    std::uint32_t count = 0;
-    const char** names = glfwGetRequiredInstanceExtensions(&count);
-    if (names == nullptr) {
-        throw std::runtime_error("GLFW reports no Vulkan support on this system");
-    }
-    return {names, names + count};
-}
-
-VkSurfaceKHR Window::createSurface(VkInstance instance) const
-{
-    VkSurfaceKHR surface = VK_NULL_HANDLE;
-    THESIS_VK_CHECK(glfwCreateWindowSurface(instance, window_, nullptr, &surface));
-    return surface;
 }
 
 } // namespace thesis::app

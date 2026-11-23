@@ -15,6 +15,7 @@ add_executable(thesis_renderer
     FileDialog.h
     FramePipeline.cpp
     FramePipeline.h
+    FrameStages.h
     Gui.cpp
     Gui.h
     Interactive.cpp
@@ -43,10 +44,14 @@ add_executable(thesis_renderer
     Screenshot.h
     ShellFiles.cpp
     ShellFiles.h
+    TracerSetup.cpp
+    TracerSetup.h
     Window.cpp
     Window.h
     WindowCommand.cpp
     WindowCommand.h
+    WindowSurface.cpp
+    WindowSurface.h
     main.cpp)
 thesis_target_defaults(thesis_renderer)
 target_link_libraries(thesis_renderer PRIVATE

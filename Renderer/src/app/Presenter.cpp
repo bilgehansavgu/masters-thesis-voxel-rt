@@ -15,8 +15,18 @@
 
 namespace thesis::app {
 
+namespace {
+
+VkExtent2D extentOf(const Window& window)
+{
+    const FramebufferSize size = window.framebufferSize();
+    return {size.width, size.height};
+}
+
+} // namespace
+
 Presenter::Presenter(const gpu::Context& context, Window& window)
-    : context_(context), window_(window), swapchain_(context, window.framebufferExtent())
+    : context_(context), window_(window), swapchain_(context, extentOf(window))
 {
     const VkDevice device = context_.device();
 
@@ -207,7 +217,7 @@ bool Presenter::present(gpu::StorageImage& image, PixelRect area, const Overlay&
 void Presenter::rebuild()
 {
     vkDeviceWaitIdle(context_.device());
-    swapchain_.recreate(window_.framebufferExtent());
+    swapchain_.recreate(extentOf(window_));
     destroyRenderFinishedSemaphores();
     createRenderFinishedSemaphores();
 }

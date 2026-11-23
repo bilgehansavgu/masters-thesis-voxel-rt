@@ -2,18 +2,20 @@
 
 // Side: View
 
-#include "thesis/gpu/StageTiming.h"
-
-#include <vulkan/vulkan.h>
-
-#include <string>
-#include <vector>
+#include <cstdint>
 
 struct GLFWwindow;
 
 namespace thesis::app {
 
-// The operating-system window (GLFW). Owns GLFW's lifetime as well.
+// The size of the window's drawing area in pixels. Zero while the window is minimised.
+struct FramebufferSize {
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+};
+
+// The operating-system window (GLFW). Owns GLFW's lifetime as well. What Vulkan needs to draw
+// into it is in WindowSurface.h.
 class Window {
 public:
     Window(int width, int height, const char* title);
@@ -22,7 +24,7 @@ public:
     Window& operator=(const Window&) = delete;
 
     [[nodiscard]] GLFWwindow* handle() const { return window_; }
-    [[nodiscard]] VkExtent2D framebufferExtent() const;
+    [[nodiscard]] FramebufferSize framebufferSize() const;
     [[nodiscard]] bool minimised() const;
     // True while the window has the keyboard focus (it is the window in front).
     [[nodiscard]] bool focused() const;
@@ -34,10 +36,6 @@ public:
 
     // True once after the window's size changed.
     [[nodiscard]] bool consumeResize();
-
-    // What Vulkan needs to draw into this window.
-    [[nodiscard]] static std::vector<std::string> requiredInstanceExtensions();
-    [[nodiscard]] VkSurfaceKHR createSurface(VkInstance instance) const;
 
 private:
     GLFWwindow* window_ = nullptr;

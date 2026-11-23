@@ -11,8 +11,10 @@
 #include "SceneSetup.h"
 #include "Screenshot.h"
 #include "ShellFiles.h"
+#include "TracerSetup.h"
 #include "Window.h"
 #include "WindowCommand.h"
+#include "WindowSurface.h"
 
 #include "thesis/gpu/Buffer.h"
 #include "thesis/gpu/Context.h"
@@ -456,8 +458,8 @@ int runInteractive(const Options& options)
 
     gpu::ContextOptions contextOptions;
     contextOptions.validation = options.validation;
-    contextOptions.instanceExtensions = Window::requiredInstanceExtensions();
-    contextOptions.createSurface = [&](VkInstance instance) { return window.createSurface(instance); };
+    contextOptions.instanceExtensions = windowInstanceExtensions();
+    contextOptions.createSurface = [&](VkInstance instance) { return createWindowSurface(window.handle(), instance); };
     const gpu::Context context(contextOptions);
 
     // The scenes to choose from: every voxel file of the model folder, a file named with --model,

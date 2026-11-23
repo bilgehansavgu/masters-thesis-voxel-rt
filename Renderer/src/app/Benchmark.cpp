@@ -3,6 +3,7 @@
 #include "FramePipeline.h"
 #include "PathText.h"
 #include "SceneSetup.h"
+#include "TracerSetup.h"
 
 #include "thesis/core/GpuTypes.h"
 #include "thesis/core/Statistics.h"

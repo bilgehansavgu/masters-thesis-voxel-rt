@@ -5,6 +5,7 @@
 #include "PathText.h"
 #include "RayLogText.h"
 #include "SceneSetup.h"
+#include "TracerSetup.h"
 
 #include "thesis/gpu/Context.h"
 #include "thesis/gpu/Image.h"

@@ -2,6 +2,8 @@
 
 // Side: GPU
 
+#include "FrameStages.h"
+
 #include "thesis/core/Camera.h"
 #include "thesis/gpu/GpuTimer.h"
 #include "thesis/gpu/Image.h"
@@ -19,11 +21,6 @@
 #include <vector>
 
 namespace thesis::app {
-
-// Stage names: shown in Tracy, used as keys in results files.
-inline constexpr const char* kStageRayGeneration = "ray_generation";
-inline constexpr const char* kStageTrace = "trace";
-inline constexpr const char* kStageShading = "shading";
 
 // The per-frame work shared by the window and the benchmark:
 //   camera rays → [tracer socket] → hits → shading → image

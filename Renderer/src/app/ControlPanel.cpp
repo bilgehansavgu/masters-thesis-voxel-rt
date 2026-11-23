@@ -5,7 +5,7 @@
 #include "ControlPanel.h"
 
 #include "FileDialog.h"
-#include "FramePipeline.h"
+#include "FrameStages.h"
 #include "PanelWidgets.h"
 #include "PathText.h"
 

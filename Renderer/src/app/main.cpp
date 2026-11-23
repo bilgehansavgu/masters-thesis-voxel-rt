@@ -4,6 +4,7 @@
 #include "Options.h"
 #include "SceneSetup.h"
 #include "Screenshot.h"
+#include "TracerSetup.h"
 
 #include <cstdio>
 #include <exception>

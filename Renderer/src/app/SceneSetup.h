@@ -8,7 +8,6 @@
 #include "thesis/core/Scene.h"
 #include "thesis/encoding/Encoding.h"
 #include "thesis/resolve/ShadingParams.h"
-#include "thesis/tracing/Tracer.h"
 #include "thesis/voxel/VoxelModel.h"
 
 #include <cstddef>
@@ -108,14 +107,7 @@ private:
 [[nodiscard]] resolve::ShadingParams startShading(const Options& options, const core::OrbitCamera& camera,
                                                   std::uint32_t warpSize);
 
-// All tracers built into the program, in registration order.
-[[nodiscard]] tracing::TracerRegistry makeTracerRegistry();
-
-// All encodings built into the program, in registration order.
+// All encodings built into the program, in registration order. The tracers: TracerSetup.h.
 [[nodiscard]] encoding::EncodingRegistry makeEncodingRegistry();
-
-// Names from `requested`, or all registered names when it is empty. Throws on unknown names.
-[[nodiscard]] std::vector<std::string> selectTracers(const tracing::TracerRegistry& registry,
-                                                     const std::vector<std::string>& requested);
 
 } // namespace thesis::app

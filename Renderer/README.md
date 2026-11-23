@@ -43,14 +43,16 @@ The encoding socket has one rule: **decoding the encoded data gives back the inp
 exactly.** A test checks this for every encoding, and `thesis_model report` checks it for a
 whole model.
 
-State after step 3: every tracer shows a voxel model. Every tracer runs the same brick test for
-each brick that its search structure gives it: the ray walks the primary grid of the brick and
-tests the filled voxels of each column (`shaders/common/brick2012.slang`). With a `_mip`
-encoding the walk first reads the min/max mipmap of the brick and skips every square of cells
-that the ray passes above or below. It finds the same hits as the walk without the mipmap, within
-the tolerance of the agreement test (relative distance 1e-4, `thesis/core/HitComparison.h`). The software tracers
-walk a uniform grid, a sparse octree or a binary BVH of their own. The window shows what each
-ray does: work views, live averages, and the ray inspector, which lists every step of one ray.
+Every tracer hands each brick that its search structure finds to the brick test of the primitive
+kind (`import primitive;`), so all tracers run the same test. In the 2012 format the ray walks the
+primary grid of the brick and tests the filled voxels of each column
+(`shaders/common/brick2012.slang`). With a `_mip` encoding the walk first reads the min/max
+mipmap of the brick and skips every square of cells that the ray passes above or below. It finds
+the same hits as the walk without the mipmap, within the tolerance of the agreement test
+(`thesis/core/HitComparison.h`). The bitmask baseline walks the same columns through its
+occupancy bits (`shaders/primitives/bitmask/primitive.slang`). The software tracers walk a
+uniform grid, a sparse octree or a binary BVH of their own. The window shows what each ray does:
+work views, live averages, and the ray inspector, which lists every step of one ray.
 
 The hardware tracers all walk the same GPU-built BVH (`tracing::BoxBvh`). `hardware` asks it
 from a compute shader (ray queries). The `hardware_pipeline` tracers run a ray tracing pipeline
@@ -85,8 +87,7 @@ Code rules the build enforces:
 - **Shader interfaces are checked.** The shader compiler writes a layout report (`<shader>.json`)
   next to each `.spv`. Creating a kernel or ray tracing pipeline fails with a clear message if a shader reads a binding
   the C++ side does not provide, with the wrong type, or expects a different push-constant
-  size; `TestShaderLayouts` compares Ray, Hit, RayWork, Aabb and the structs of the brick
-  buffers field by field.
+  size; `TestShaderLayouts` compares every struct that C++ and the shaders share, field by field.
 
 ## Making a voxel model
 
@@ -116,7 +117,8 @@ build/src/app/Release/thesis_renderer.exe --model ../Models/lucy-2048.voxels --e
 build/src/app/Release/thesis_renderer.exe --help
 ```
 
-To repeat the empty-space skipping comparison with the benchmark runner, use the following from `Renderer`.
+To compare empty-space skipping off and on at one camera, and to reopen the scene and camera of
+a saved fixed-view result (run from `Renderer`):
 
 ```bash
 build/src/app/Release/thesis_renderer.exe --model ../Models/lucy-2048.voxels --compare-skipping --tracer hardware
@@ -139,7 +141,9 @@ solid boxes. Docked areas sit around the image (drag a tab to rearrange them):
   files are kept in `%LOCALAPPDATA%/thesis_renderer/recent.json`. A right click on a model of the
   list: *Show in Explorer*, *Remove from list* (the file stays; a file of `../Models` is back at the
   next start) or *Move to Recycle Bin...* (asks first). The model on screen cannot be removed.
-- *Encoding*: one switch per setting of the encodings (layout, mipmap), and the brick size.
+- *Encoding*: one switch per setting of the encodings (layout, mipmap), and the brick size. A
+  switch encodes the model again and rebuilds the search structures, so every number in the
+  window belongs to what is on screen.
 - *Rays*: the ray order (rows or tiles) and the kept cameras. They start as the cameras of the
   benchmark plan (standard x1, close x0.35, near x0.18). **Keep view** adds the current camera under
   a name; a right click renames a camera, moves it to the current view or deletes it; **Restore
@@ -202,16 +206,22 @@ the window reads the distance to the surface of each pixel once each time the ca
 The **status bar** at the bottom always shows the model, the encoding settings, the brick size,
 the ray order, the camera, the tracer, the view and the trace time.
 
-In the window: left-drag to orbit, scroll to zoom. Hold the right button to fly: the mouse turns
-the view, **W/A/S/D** move, **Q/E** go down and up, **Shift** is faster, scrolling sets the speed. **Tab** switches the tracer, **E** the encoding,
-**B** the brick size (with Shift: the one before), **1-9, 0, -, =, C** the view. **F** folds every
-window (image only), **P** saves the image. **M** measures
-every tracer at the current camera ("Quick timing"), **R** resets the camera. **S** shows the
-search structure, the **arrow keys** step along a picked ray, **V** shows it from the side. A **right click**
-(without moving the mouse) on the image starts the ray inspector on that pixel, **Esc** stops it. The panel shows the size
-of every buffer of the current encoding and the bits per voxel. Switching the encoding or the
-brick size encodes the model again and rebuilds the search structures, so the numbers in the
-panel always belong to what is on screen.
+Mouse and keys in the window:
+
+| Input | Does |
+|---|---|
+| Left drag / scroll | Orbit / zoom |
+| Hold right button | Fly: the mouse turns the view, W/A/S/D move, Q/E go down and up, Shift is faster, scrolling sets the speed |
+| Right click (without moving) | Ray inspector on that pixel; Esc stops it |
+| Arrow keys / V | Step along the inspected ray / show it from the side |
+| S | Show the search structure |
+| Tab / E | Next tracer / next encoding |
+| B, Shift+B | Next / previous brick size |
+| 1-9, 0, -, =, C | View (next table) |
+| M | Quick timing of every tracer at this camera |
+| R | Reset the camera |
+| F | Image only: fold every window; F again opens them |
+| P | Save the image |
 
 | Key | View |
 |---|---|
@@ -225,7 +235,7 @@ panel always belong to what is on screen.
 | 0 | Steps through the tracer's own search structure (the hardware tracers cannot count them) |
 | - | Mipmap cells read |
 | = | The largest mipmap square that the walk skipped: blue 2x2 cells, green 4x4, yellow 8x8, orange 16x16, red 32x32 |
-| C | GPU clock cycles of the ray, read with the clock of its warp: where the time goes, for every compute shader tracer that counts work (the ray query hardware tracer too), not for ray tracing pipeline tracers (after TraceRay a ray may run on another SM, whose clock differs). From the counting shader: for looking, never a thesis number |
+| C | GPU clock cycles of the ray, read with the clock of its warp. From the counting shader: for looking, never a thesis number. Not for the ray tracing pipeline tracers (see [Work counters](#work-counters)) |
 
 Work views and the frame that captures a selected pixel run the counting shader. Exploring the
 saved ray uses its recorded events. The comparison table only accepts ordinary trace frames. With a
@@ -235,32 +245,21 @@ The **ray inspector** lists every step of one ray in order: the cells or nodes o
 structure, the primitives it was tested against, and inside each brick the mipmap squares (with
 their lowest and highest voxel, and whether the ray skipped them), the cells and the runs, then
 the hit. "Copy as text" puts the list on the clipboard. The hardware tracers cannot report the
-nodes of its BVH, so its list starts at the primitives.
+nodes of the GPU's BVH, so their lists start at the primitives.
 
-`--benchmark` is headless and writes `results/<time>_<tracer>[_<encoding>].json`.
-`--screenshot <file.png>` is headless too: it writes one frame, with `--view <1-13>`. A view
-with a legend (2, 6 to 13) gets it in a strip below the image, as in the window. Count views
-(6, 7, 8, 10, 11, 13): viridis, black for 0, white above `--scale-max <count>` (default 64, for view 13 20000), linear
-or with `--log-scale` log2; `--warp-max` shows the largest count of each warp. With
-`--inspect <x> <y>` it also prints every step of the ray of that pixel. In the window,
-`--inspect` starts the ray inspector on that pixel. `--brick-size 8|16|32` regroups the voxels
-into bricks of that size before the encoding.
-`--camera <yaw> <pitch> <factor>` sets the camera at the start: two angles in degrees, and the
-distance as a factor of the distance that shows the whole scene. For the benchmark it is the
-start and the radius of the orbit. `--exact-camera <x> <y> <z> <yaw> <pitch> <distance>` sets the
-camera as the window has it (target, angles, distance), as "Copy as command" writes it.
-`--light <azimuth> <elevation>` (degrees) moves the light of views 1 and 5, `--distance-range
-<near> <far>` sets the range of view 2. `--view`, `--scale-max`, `--log-scale`, `--light` and
-`--distance-range` set the start of the window too; a range given this way turns the window's
-automatic ranges off, so the window shows what the command says.
-`--ray-order rows|tiles` sets where the ray of each pixel sits in the ray list. The GPU traces
-32 neighbouring rays of the list together. With `rows` (the default) these are 32 pixels of one
-row; with `tiles` they are a tile of 8 x 4 pixels. The image is the same either way; only the
-speed can change. The rule is in `shared/include/thesis/shared/RayOrder.h`.
-`--list-tracers` and `--list-encodings` print what is built in (an encoding with its settings).
-`--self-test` uses every control of the window once (it imports a small sphere into
-`%TEMP%/thesis_self_test`, not into `../Models`), then checks "Copy as command": it renders
-the frame on screen again from its screenshot command and exits with code 3 if one pixel differs.
+`--benchmark` and `--screenshot <file.png>` run without a window. The benchmark writes
+`results/<time>_<tracer>[_<encoding>].json`. A screenshot of a view with a legend gets the legend
+in a strip below the image, as in the window; with `--inspect <x> <y>` it also prints every step
+of the ray of that pixel. `thesis_renderer --help` lists every option. What the help does not say:
+
+- `--view`, `--scale-max`, `--log-scale`, `--light` and `--distance-range` also set the start of
+  the window. A range given this way turns the window's automatic ranges off, so the window shows
+  what the command says.
+- `--ray-order` changes the speed, never the image: it sets which 32 rays of the ray list the GPU
+  traces together (the rule is in `shared/include/thesis/shared/RayOrder.h`).
+- `--exact-camera` takes the camera as "Copy as command" writes it.
+- `--self-test` imports a small sphere into `%TEMP%/thesis_self_test` (not into `../Models`) and
+  exits with code 3 if the frame rendered again from its screenshot command differs by one pixel.
 
 ### Many runs at once
 
@@ -289,15 +288,17 @@ result. A tracer whose rays may move to another SM during the trace (every ray t
 Vulkan may repack the invocations at TraceRay, with or without shader execution reordering)
 reports no cycles (`ITracer::countsCycles`): the SM clocks differ, so the difference is not valid.
 The results file then has `null` for the cycles, as for any counter a tracer does not report. For one ray that the caller names, it also
-writes every step to the ray log (`shared/include/thesis/shared/RayLog.h`, at most 4,095 steps).
+writes every step to the ray log (`shared/include/thesis/shared/RayLog.h`, at most
+`THESIS_RAY_LOG_CAPACITY` steps).
 In the timed variant the counter struct is empty, so counting costs it nothing
 (`shaders/common/work.slang`). A test checks that the ray log of a ray agrees with its counters
 and ends with its hit. After the timed repeats of each tracer the benchmark runs the
 counting variant from 8 points of the orbit and adds the result to the results file as
 `summary.ray_work`.
 
-Live profiling: start the [Tracy](https://github.com/wolfpld/tracy/releases) profiler
-**v0.11.1** (must match the client version in vcpkg) and connect while the renderer runs.
+Live profiling: start the [Tracy](https://github.com/wolfpld/tracy/releases) profiler and
+connect while the renderer runs. Its version must match the client that vcpkg installs: v0.11.1
+at the time of writing; `build/vcpkg_installed/vcpkg/info/tracy_*.list` names it.
 
 ## Measuring rules
 

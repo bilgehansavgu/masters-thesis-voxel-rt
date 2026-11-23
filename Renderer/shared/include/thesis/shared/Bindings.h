@@ -1,5 +1,7 @@
 /* Side: Shared */
-/* Descriptor binding slots: the ONLY place a slot number is written.
+/* Descriptor binding slots of the sockets: the ONLY place these slot numbers are written. The
+ * slots that belong to one tracer (2..6) or one primitive kind (9..15) are written beside that
+ * plugin's other numbers.
  *
  * Included verbatim by C++ (src/tracing/include/thesis/tracing/Bindings.h and others) and by
  * Slang shaders. Both languages run the C preprocessor, so this file may contain nothing but
@@ -19,26 +21,14 @@
 
 #define THESIS_BINDING_RAY_WORK 7 /* counting variant of a tracer only: one RayWork per ray, write */
 
-#define THESIS_BINDING_PRIMITIVE_BOUNDS 8      /* every primitive kind gets its bounds here */
-#define THESIS_BINDING_PRIMITIVE_DATA_FIRST 9  /* 9..15: the primitive kind's own data */
+#define THESIS_BINDING_PRIMITIVE_BOUNDS 8 /* every primitive kind gets its bounds here */
+
+/* 9..15: the primitive kind's own data. Each kind names its own beside its bits: in the header
+ * that its encoder and its primitive.slang share. */
+#define THESIS_BINDING_PRIMITIVE_DATA_FIRST 9
 #define THESIS_BINDING_PRIMITIVE_DATA_LAST 15
 
 #define THESIS_BINDING_RAY_LOG 16 /* counting variant of a tracer only: the steps of one ray, see RayLog.h */
-
-/* Primitive kinds brick2012_inline, brick2012_split and their _mip variants (the layouts are in Brick2012.h). */
-#define THESIS_BINDING_BRICK_HEADER 9       /* one BrickModelHeader */
-#define THESIS_BINDING_BRICK_TABLE 10       /* one BrickRecord per brick */
-#define THESIS_BINDING_BRICK_CELLS 11       /* the primary grid cells of all bricks */
-#define THESIS_BINDING_BRICK_INDIRECTION 12 /* 16-bit words: the runs of columns with more than one voxel */
-#define THESIS_BINDING_BRICK_ATTRIBUTES 13  /* split layout only: one 16-bit normal per voxel */
-#define THESIS_BINDING_BRICK_MIPMAP 14      /* encodings with mipmap only: 16-bit min/max mipmap cells */
-
-/* Primitive kind bitmask, the baseline format (the layout is in Bitmask.h). */
-#define THESIS_BINDING_BITMASK_HEADER 9      /* one BitmaskModelHeader */
-#define THESIS_BINDING_BITMASK_TABLE 10      /* one BitmaskBrickRecord per brick */
-#define THESIS_BINDING_BITMASK_MASKS 11      /* one occupancy bit per voxel */
-#define THESIS_BINDING_BITMASK_ROW_COUNTS 12 /* 16-bit words: filled voxels before each row of cells */
-#define THESIS_BINDING_BITMASK_NORMALS 13    /* 16-bit words: one normal per filled voxel */
 
 /* Shading kernel (descriptor set 0). */
 #define THESIS_BINDING_SHADE_HITS 0

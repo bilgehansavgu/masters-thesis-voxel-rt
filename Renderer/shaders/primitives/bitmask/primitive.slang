@@ -1,5 +1,5 @@
 // Primitive kind "bitmask": one primitive is one voxel brick of the baseline format, one occupancy
-// bit for every voxel. Encoder: src/encodings/bitmask. Bit layout: thesis/shared/Bitmask.h. The
+// bit for every voxel. Encoder: src/encodings/bitmask. Bit layout: thesis/bitmask/BitmaskShared.h. The
 // primitive contract is in ../box/primitive.slang.
 //
 // The brick test walks the ray across the columns of the brick, front to back, like the walk of
@@ -13,8 +13,8 @@
 import types;
 import work;
 import bounds;
+#include "thesis/bitmask/BitmaskShared.h"
 #include "thesis/shared/Bindings.h"
-#include "thesis/shared/Bitmask.h"
 #include "thesis/shared/Brick2012.h" // THESIS_CELL_*: the column kinds that the ray log names
 #include "thesis/shared/Hit.h"
 

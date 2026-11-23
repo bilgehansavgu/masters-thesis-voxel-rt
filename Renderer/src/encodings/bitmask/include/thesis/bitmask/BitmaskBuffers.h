@@ -10,7 +10,7 @@ namespace thesis::bitmask {
 
 // CPU mirrors of the structs in shaders/primitives/bitmask/primitive.slang. The GPU reads them
 // with std430 layout. tests/TestShaderLayouts.cpp checks the shader side against them field by
-// field. The buffers are described in shared/include/thesis/shared/Bitmask.h.
+// field. The buffers are described in BitmaskShared.h.
 
 // Buffer "header": facts about the whole model. 3 x 16 bytes.
 struct BitmaskModelHeader {
@@ -26,7 +26,7 @@ struct BitmaskModelHeader {
 static_assert(sizeof(BitmaskModelHeader) == 48);
 
 // Buffer "brick table": one record per brick, at the index of its primitive. The masks and the
-// row counts of brick b start at fixed places (Bitmask.h), so the record needs no field for them.
+// row counts of brick b start at fixed places (BitmaskShared.h), so the record needs no field for them.
 struct BitmaskBrickRecord {
     std::uint32_t position;   // brick coordinate, see THESIS_BITMASK_COORDINATE_*
     std::uint32_t normalBase; // index of the brick's first normal in the normal buffer

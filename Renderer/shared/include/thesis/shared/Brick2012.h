@@ -9,7 +9,7 @@
  * axis (a + 1) % 3 and position v on axis (a + 2) % 3. The cell index is u + N * v. A height is
  * a position in the column, 0 .. N - 1. A run is a row of filled voxels in one column.
  *
- * Buffers (bindings in Bindings.h):
+ * Buffers (bindings below):
  *   header       BrickModelHeader: grid origin, voxel size, N, brick count, layout number
  *   brick table  one BrickRecord per brick: position, primary axis, where its data starts
  *   cells        N * N cells per brick
@@ -53,6 +53,14 @@
  */
 #ifndef THESIS_SHARED_BRICK2012_H
 #define THESIS_SHARED_BRICK2012_H
+
+/* Bindings of the 2012 primitive kinds, inside THESIS_BINDING_PRIMITIVE_DATA_FIRST .. _LAST. */
+#define THESIS_BINDING_BRICK_HEADER 9       /* one BrickModelHeader */
+#define THESIS_BINDING_BRICK_TABLE 10       /* one BrickRecord per brick */
+#define THESIS_BINDING_BRICK_CELLS 11       /* the primary grid cells of all bricks */
+#define THESIS_BINDING_BRICK_INDIRECTION 12 /* 16-bit words: the runs of columns with more than one voxel */
+#define THESIS_BINDING_BRICK_ATTRIBUTES 13  /* split layout only: one 16-bit normal per voxel */
+#define THESIS_BINDING_BRICK_MIPMAP 14      /* encodings with mipmap only: 16-bit min/max mipmap cells */
 
 #define THESIS_BRICK_LAYOUT_INLINE 1
 #define THESIS_BRICK_LAYOUT_SPLIT 2

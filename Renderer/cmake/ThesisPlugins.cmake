@@ -15,6 +15,12 @@ function(thesis_register_plugin)
     endif()
     set_property(GLOBAL APPEND PROPERTY THESIS_${ARG_SOCKET}_PLUGIN_TARGETS ${ARG_TARGET})
     set_property(GLOBAL APPEND PROPERTY THESIS_${ARG_SOCKET}_PLUGIN_FUNCTIONS ${ARG_FUNCTION})
+    # The plugin's include/ folder, for shaders compiled elsewhere that read the plugin's
+    # <Name>Shared.h (see thesis_add_shaders PER_PRIMITIVE).
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/include")
+        set_property(GLOBAL APPEND PROPERTY THESIS_${ARG_SOCKET}_PLUGIN_INCLUDE_DIRS
+            "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    endif()
 endfunction()
 
 # thesis_generate_plugin_registration(SOCKET <name> TARGET <library> REGISTRY_HEADER <header>

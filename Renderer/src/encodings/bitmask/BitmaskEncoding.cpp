@@ -4,13 +4,12 @@
 //
 //   bitmask   occupancy bits, row counts to find a normal, normals
 //
-// Every bit is defined in shared/include/thesis/shared/Bitmask.h, which the shader
+// Every bit and binding is defined in thesis/bitmask/BitmaskShared.h, which the shader
 // (shaders/primitives/bitmask) reads as well.
 
 #include "thesis/bitmask/BitmaskBuffers.h"
+#include "thesis/bitmask/BitmaskShared.h"
 #include "thesis/encoding/Encoding.h"
-#include "thesis/shared/Bindings.h"
-#include "thesis/shared/Bitmask.h"
 
 #include <glm/common.hpp>
 

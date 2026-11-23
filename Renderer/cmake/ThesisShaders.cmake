@@ -6,6 +6,8 @@
 # This is how an encoding plugs into every tracer without the tracer's code changing.
 # The include/ folder of the calling library is on the search path too, so a plugin keeps the
 # numbers its C++ and its shader share in its own folder (<Name>Shared.h), not in shared/.
+# A primitive kind's shader is compiled inside each tracer, away from its encoder, so the
+# include/ folder of every encoding plugin is on the search path of PER_PRIMITIVE shaders.
 
 find_program(SLANGC_EXECUTABLE slangc
     HINTS "$ENV{VULKAN_SDK}/Bin" "$ENV{VULKAN_SDK}/bin"
@@ -48,6 +50,18 @@ function(thesis_add_shaders)
         file(GLOB_RECURSE own_headers CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/include/*.h")
         list(APPEND shared_modules ${own_headers})
         list(APPEND flags -I "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    endif()
+    if(ARG_PER_PRIMITIVE)
+        get_property(encoding_includes GLOBAL PROPERTY THESIS_ENCODING_PLUGIN_INCLUDE_DIRS)
+        if(NOT encoding_includes)
+            message(FATAL_ERROR "thesis_add_shaders(PER_PRIMITIVE) in ${CMAKE_CURRENT_SOURCE_DIR}: no "
+                                "encoding plugin is registered yet. Add src/encodings before the tracers.")
+        endif()
+        foreach(encoding_include IN LISTS encoding_includes)
+            file(GLOB_RECURSE encoding_headers CONFIGURE_DEPENDS "${encoding_include}/*Shared.h")
+            list(APPEND shared_modules ${encoding_headers})
+            list(APPEND flags -I "${encoding_include}")
+        endforeach()
     endif()
     foreach(capability IN LISTS ARG_CAPABILITIES)
         list(APPEND flags -capability ${capability})
